@@ -192,7 +192,12 @@ async def process_message(data: Dict[str, Any]) -> Dict[str, Any] | None:
         message_json = data.get("object", {}).get("content", "").strip()
         message_obj = json.loads(message_json)
         message_text = message_obj.get("message", "").strip()
-        user_id = data.get("user", {}).get("id", "")
+        user_id_data = data.get("user", {}).get("id", "")
+        tails = user_id_data.split("/")
+        if len(tails) > 1:
+            user_id = tails[1]
+        else:
+            user_id = user_id_data
         room_token = data.get("target", {}).get("id", "")
         message_id = data.get("object", {}).get("id", "")
 

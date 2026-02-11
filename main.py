@@ -66,7 +66,7 @@ def verify_signature(
 # Обработка команд
 class CommandHandler:
     @staticmethod
-    async def handle_help(command_args: list = None) -> str:
+    async def handle_help(command_args: list = None, user_id=None) -> str:
         """Обработка команды помощи"""
         help_text = """
         🤖 *Доступные команды:*
@@ -75,6 +75,7 @@ class CommandHandler:
         • `помощь` - показать это сообщение
         • `привет` - поздороваться с ботом
         • `время` - текущее время
+        • `я` - мой профиль
 
         *Полезные:*
         • `погода [город]` - прогноз погоды
@@ -91,18 +92,18 @@ class CommandHandler:
         return help_text
 
     @staticmethod
-    async def handle_greet(command_args: list = None) -> str:
+    async def handle_greet(command_args: list = None, user_id=None) -> str:
         """Приветствие"""
         return "Привет! 👋 Я бот ЗАО СММ. Напишите `!помощь` для списка команд."
 
     @staticmethod
-    async def handle_time(command_args: list = None) -> str:
+    async def handle_time(command_args: list = None, user_id=None) -> str:
         """Текущее время"""
         now = datetime.now()
         return f"🕐 Текущее время: {now.strftime('%H:%M:%S %d.%m.%Y')} UTC"
 
     @staticmethod
-    async def handle_weather(command_args: list = None) -> str:
+    async def handle_weather(command_args: list = None, user_id=None) -> str:
         """Прогноз погоды"""
         if not command_args:
             return "Укажите город. Пример: `погода Москва`"
@@ -112,12 +113,29 @@ class CommandHandler:
         return f"🌤️ Погода для {city}: +18°C, солнечно (шутка)"
 
     @staticmethod
-    async def handle_bot_status(command_args: list = None) -> str:
+    async def handle_bot_status(command_args: list = None, user_id=None) -> str:
         """Статус бота"""
         return "✅ Бот работает нормально\nВерсия: 1.0.0\nВремя работы: 24/7"
 
     @staticmethod
-    async def handle_unknown(command: str) -> str:
+    async def handle_bot_user_profile(command_args: list = None, user_id=None) -> str:
+        res = await get_user_profile(user_id)
+        profile = res.get('data')
+        manager = profile.get('manager')
+        email = profile.get('email')
+        displayname = profile.get('displayname')
+        organisation = profile.get('organisation')
+        role = profile.get('role')
+        return ("👤 Мой профиль\n"
+                f"Имя: {displayname}"
+                f"Подразделение: {organisation}"
+                f"Руководитель: {manager}"
+                f"Должность: {role}"
+                f"Почта: {email}"
+                f"")
+
+    @staticmethod
+    async def handle_unknown(command: str, user_id=None) -> str:
         """Неизвестная команда"""
         return f"❌ Неизвестная команда: `{command}`\nИспользуйте `!помощь` для списка команд."
 
@@ -168,7 +186,7 @@ async def handle_webhook(
 
 async def process_message(data: Dict[str, Any]) -> Dict[str, Any] | None:
     """Обработка входящего сообщения"""
-
+    print(f'data: {data}')
     # Извлекаем данные
     try:
         message_json = data.get("object", {}).get("content", "").strip()
@@ -211,7 +229,7 @@ async def process_message(data: Dict[str, Any]) -> Dict[str, Any] | None:
         }
 
 
-async def handle_command(message: str, user_id: str, room_token: str) -> str:
+async def handle_command(message: str, user_id: str=None, room_token: str=None) -> str:
     """Обработка команд"""
 
     # Извлекаем команду и аргументы
@@ -235,12 +253,14 @@ async def handle_command(message: str, user_id: str, room_token: str) -> str:
         "бот": CommandHandler.handle_bot_status,
         "bot": CommandHandler.handle_bot_status,
         "status": CommandHandler.handle_bot_status,
+        "me": CommandHandler.handle_bot_user_profile,
+        "я": CommandHandler.handle_bot_user_profile,
     }
 
     # Выполняем команду
     handler = command_handlers.get(command)
     if handler:
-        return await handler(args)
+        return await handler(args, user_id)
     else:
         # Проверяем комбинированные команды типа "бот статус"
         if command == "бот" and args:
@@ -249,6 +269,27 @@ async def handle_command(message: str, user_id: str, room_token: str) -> str:
                 return await CommandHandler.handle_bot_status(args[1:])
 
         return await CommandHandler.handle_unknown(command)
+
+
+async def get_user_profile(user_id):
+    headers = {
+        "OCS-APIRequest": "true",
+        "Accept": "application/json",
+    }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(
+                f'{config.NEXTCLOUD_URL}/ocs/v1.php/cloud/users/{user_id}',
+                headers=headers,
+                params={'format': 'json'},
+                auth=(config.NEXTCLOUD_API_USER, config.NEXTCLOUD_API_PASSWORD),
+                timeout=30.0
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            print(f"Error sending to Nextcloud: {e}")
 
 
 # Функция для отправки сообщений в Nextcloud

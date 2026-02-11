@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import secrets
 from datetime import datetime
 from typing import Optional, Dict, Any
 
@@ -41,19 +42,25 @@ security = HTTPBearer()
 def verify_signature(
         payload: bytes,
         signature: str,
-        secret: str = config.WEBHOOK_SECRET
+        random: str,  # Важно: добавляем параметр random
+        secret: str
 ) -> bool:
-    """Проверка HMAC подписи от Nextcloud"""
-    if not signature:
+    """
+    Проверка подписи вебхука Nextcloud Talk
+    Формат: hash_hmac('sha256', random . body, secret)
+    """
+    if not signature or not secret or not random:
         return False
 
-    expected_signature = hmac.new(
-        secret.encode(),
-        payload,
+    # Создаем дайджест: random + body
+    digest = hmac.new(
+        secret.encode('utf-8'),
+        (random + payload.decode('utf-8')).encode('utf-8'),
         hashlib.sha256
     ).hexdigest()
 
-    return hmac.compare_digest(signature, expected_signature)
+    # Сравниваем (без учета регистра)
+    return hmac.compare_digest(digest.lower(), signature.lower())
 
 
 # Обработка команд
@@ -79,20 +86,20 @@ class CommandHandler:
         • `бот пользователи` - список пользователей
         • `бот команды` - все команды
 
-        *Формат:* `@ИмяБота команда параметры`
+        *Формат:* `!ИмяБота команда параметры`
         """
         return help_text
 
     @staticmethod
     async def handle_greet(command_args: list = None) -> str:
         """Приветствие"""
-        return "Привет! 👋 Я бот Nextcloud Talk. Напишите `помощь` для списка команд."
+        return "Привет! 👋 Я бот ЗАО СММ. Напишите `!помощь` для списка команд."
 
     @staticmethod
     async def handle_time(command_args: list = None) -> str:
         """Текущее время"""
         now = datetime.now()
-        return f"🕐 Текущее время: {now.strftime('%H:%M:%S %d.%m.%Y')}"
+        return f"🕐 Текущее время: {now.strftime('%H:%M:%S %d.%m.%Y')} UTC"
 
     @staticmethod
     async def handle_weather(command_args: list = None) -> str:
@@ -102,7 +109,7 @@ class CommandHandler:
 
         city = ' '.join(command_args)
         # Здесь можно добавить вызов API погоды
-        return f"🌤️ Погода для {city}: +18°C, солнечно"
+        return f"🌤️ Погода для {city}: +18°C, солнечно (шутка)"
 
     @staticmethod
     async def handle_bot_status(command_args: list = None) -> str:
@@ -112,7 +119,7 @@ class CommandHandler:
     @staticmethod
     async def handle_unknown(command: str) -> str:
         """Неизвестная команда"""
-        return f"❌ Неизвестная команда: `{command}`\nИспользуйте `помощь` для списка команд."
+        return f"❌ Неизвестная команда: `{command}`\nИспользуйте `!помощь` для списка команд."
 
 
 # Основной обработчик вебхуков
@@ -120,8 +127,8 @@ class CommandHandler:
 async def handle_webhook(
         bot_name: str,
         request: Request,
-        x_nextcloud_talk_signature: Optional[str] = Header(None),
-        x_nextcloud_talk_random: Optional[str] = Header(None)
+        x_nextcloud_talk_signature: Optional[str] = Header(None, alias="X-Nextcloud-Talk-Signature"),
+        x_nextcloud_talk_random: Optional[str] = Header(None, alias="X-Nextcloud-Talk-Random"),
 ):
     """Основной endpoint для вебхуков Nextcloud Talk"""
 
@@ -131,15 +138,18 @@ async def handle_webhook(
         data = await request.json()
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
-
-
-    print(bot_name)
-    print(data)
-    print(x_nextcloud_talk_signature)
-    print(x_nextcloud_talk_random)
     # Валидация подписи
     if config.WEBHOOK_SECRET:
-        if not verify_signature(payload, x_nextcloud_talk_signature):
+        if not verify_signature(
+            payload,
+            x_nextcloud_talk_signature,
+            x_nextcloud_talk_random,
+            config.WEBHOOK_SECRET
+        ):
+            print(f"❌ Неверная подпись!")
+            print(f"   Random: {x_nextcloud_talk_random}")
+            print(f"   Signature received: {x_nextcloud_talk_signature}")
+            print(f"   Signature calculated: [скрыто]")
             raise HTTPException(status_code=401, detail="Invalid signature")
 
     # Логирование входящего запроса
@@ -148,21 +158,32 @@ async def handle_webhook(
     # Обработка сообщения
     response = await process_message(data)
 
+    print(f"response: {response}")
+
+    if response:
+        await send_to_nextcloud(response.get('room_token'), response.get('message'))
+
     return response
 
 
-async def process_message(data: Dict[str, Any]) -> Dict[str, Any]:
+async def process_message(data: Dict[str, Any]) -> Dict[str, Any] | None:
     """Обработка входящего сообщения"""
 
     # Извлекаем данные
-    message_text = data.get("message", {}).get("message", "").strip()
-    user_id = data.get("user", {}).get("id", "")
-    room_token = data.get("room", {}).get("token", "")
-    message_id = data.get("message", {}).get("id", "")
+    try:
+        message_json = data.get("object", {}).get("content", "").strip()
+        message_obj = json.loads(message_json)
+        message_text = message_obj.get("message", "").strip()
+        user_id = data.get("user", {}).get("id", "")
+        room_token = data.get("target", {}).get("id", "")
+        message_id = data.get("object", {}).get("id", "")
 
+    except Exception as e:
+        print(f'{datetime.now().isoformat("T")}: {e}')
+        return
     # Игнорируем сообщения без текста или от ботов
     if not message_text or user_id.startswith("bot-"):
-        return {}
+        return
 
     # Проверяем, обращено ли сообщение к боту
     bot_mentioned = (
@@ -172,10 +193,10 @@ async def process_message(data: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     if not bot_mentioned:
-        return {}
+        return
 
     # Очищаем сообщение от упоминания бота
-    clean_message = message_text.replace(f"@{config.BOT_NAME}", "").replace(config.BOT_NAME, "").strip()
+    clean_message = message_text.replace(f"@{config.BOT_NAME}", "").replace(config.BOT_NAME, "").strip().removeprefix("!")
 
     # Обработка команд
     response_text = await handle_command(clean_message, user_id, room_token)
@@ -183,12 +204,11 @@ async def process_message(data: Dict[str, Any]) -> Dict[str, Any]:
     # Формируем ответ
     if response_text:
         return {
-            "response": response_text,
+            "message": response_text,
             "replyTo": message_id,
+            "room_token": room_token,
             "silent": False
         }
-
-    return {}
 
 
 async def handle_command(message: str, user_id: str, room_token: str) -> str:
@@ -232,29 +252,46 @@ async def handle_command(message: str, user_id: str, room_token: str) -> str:
 
 
 # Функция для отправки сообщений в Nextcloud
-async def send_to_nextcloud(room_token: str, message: str):
+async def send_to_nextcloud(room_token: str, message: str, rely_to: int = None, silent=False):
     """Отправка сообщения в Nextcloud Talk"""
-    url = f"{config.NEXTCLOUD_URL}/ocs/v2.php/apps/spreed/api/v1/chat/{room_token}"
+    url = f"{config.NEXTCLOUD_URL}/ocs/v2.php/apps/spreed/api/v1/bot/{room_token}/message"
+
+    new_message_id = secrets.token_hex(64)
+    # Generate a random header and signature
+    RANDOM_HEADER = new_message_id
+    MESSAGE_TO_SIGN = f"{RANDOM_HEADER}{message}"
+
+    SECRET = config.WEBHOOK_SECRET  # Укажите ваш секретный ключ
+
+    SIGNATURE = hmac.new(
+        SECRET.encode(),
+        MESSAGE_TO_SIGN.encode(),
+        hashlib.sha256
+    ).hexdigest()
 
     headers = {
         "OCS-APIRequest": "true",
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {config.NEXTCLOUD_TOKEN}"
+        "Accept": "application/json",
+        "X-Nextcloud-Talk-Bot-Random": RANDOM_HEADER,
+        "X-Nextcloud-Talk-Bot-Signature": SIGNATURE,
     }
 
+    message_payload = {"message": message, "referenceId": new_message_id, "silent":silent}
+    if rely_to:
+        message_payload["replyTo"] = rely_to
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
                 url,
-                json={"message": message},
+                json=message_payload,
                 headers=headers,
                 timeout=30.0
             )
             response.raise_for_status()
-            return True
+            return new_message_id
         except Exception as e:
             print(f"Error sending to Nextcloud: {e}")
-            return False
 
 
 # Функция логирования

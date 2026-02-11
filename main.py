@@ -120,19 +120,19 @@ class CommandHandler:
     @staticmethod
     async def handle_bot_user_profile(command_args: list = None, user_id=None) -> str:
         res = await get_user_profile(user_id)
-        profile = res.get('data')
+        ocs = res.get('ocs')
+        profile = ocs.get('data')
         manager = profile.get('manager')
         email = profile.get('email')
         displayname = profile.get('displayname')
         organisation = profile.get('organisation')
         role = profile.get('role')
         return ("👤 Мой профиль\n"
-                f"Имя: {displayname}"
-                f"Подразделение: {organisation}"
-                f"Руководитель: {manager}"
-                f"Должность: {role}"
-                f"Почта: {email}"
-                f"")
+                f"Имя: {displayname}\n"
+                f"Подразделение: {organisation}\n"
+                f"Руководитель: {manager}\n"
+                f"Должность: {role}\n"
+                f"Почта: {email}")
 
     @staticmethod
     async def handle_unknown(command: str, user_id=None) -> str:
@@ -176,8 +176,6 @@ async def handle_webhook(
     # Обработка сообщения
     response = await process_message(data)
 
-    print(f"response: {response}")
-
     if response:
         await send_to_nextcloud(response.get('room_token'), response.get('message'))
 
@@ -186,13 +184,12 @@ async def handle_webhook(
 
 async def process_message(data: Dict[str, Any]) -> Dict[str, Any] | None:
     """Обработка входящего сообщения"""
-    print(f'data: {data}')
     # Извлекаем данные
     try:
         message_json = data.get("object", {}).get("content", "").strip()
         message_obj = json.loads(message_json)
         message_text = message_obj.get("message", "").strip()
-        user_id_data = data.get("user", {}).get("id", "")
+        user_id_data = data.get("actor", {}).get("id", "")
         tails = user_id_data.split("/")
         if len(tails) > 1:
             user_id = tails[1]
@@ -281,11 +278,11 @@ async def get_user_profile(user_id):
         "OCS-APIRequest": "true",
         "Accept": "application/json",
     }
-
+    url = f'{config.NEXTCLOUD_URL}/ocs/v1.php/cloud/users/{user_id}'
     async with httpx.AsyncClient() as client:
         try:
             response = await client.get(
-                f'{config.NEXTCLOUD_URL}/ocs/v1.php/cloud/users/{user_id}',
+                url,
                 headers=headers,
                 params={'format': 'json'},
                 auth=(config.NEXTCLOUD_API_USER, config.NEXTCLOUD_API_PASSWORD),

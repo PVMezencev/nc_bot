@@ -135,6 +135,8 @@ async def handle_webhook(
 
     print(bot_name)
     print(data)
+    print(x_nextcloud_talk_signature)
+    print(x_nextcloud_talk_random)
     # Валидация подписи
     if config.WEBHOOK_SECRET:
         if not verify_signature(payload, x_nextcloud_talk_signature):
@@ -273,7 +275,7 @@ if __name__ == "__main__":
 
     uvicorn.run(
         app,
-        host="0.0.0.0",
-        port=8080,
+        host=config.APP_HOST,
+        port=config.APP_PORT,
         log_level="info",
     )

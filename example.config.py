@@ -26,3 +26,6 @@ COMMANDS = {
 
 # Время ответа
 RESPONSE_TIMEOUT = 5  # секунд
+
+APP_HOST = os.getenv("LOG_LEVEL", "0.0.0.0")
+APP_PORT = os.getenv("APP_PORT", 8000)

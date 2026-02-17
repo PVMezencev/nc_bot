@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import hmac
 import json
@@ -7,6 +8,60 @@ from typing import Dict, Any
 import httpx
 
 import secrets
+
+from pydantic import BaseModel
+
+
+class StateData(BaseModel):
+    data: Dict[str, Any]
+    state: str
+
+
+class State:
+    def __init__(self):
+        self.data: Dict[str, StateData] = dict()
+        self.__lock = asyncio.Lock()
+
+    async def get_state(self, chat: str) -> StateData:
+        async with self.__lock:
+            return self.data.get(chat)
+
+    async def set_state(self, chat: str, state: str):
+        async with self.__lock:
+            __current_state_data = await self.get_state(chat)
+            if not __current_state_data:
+                __current_state_data = StateData(state=state, data=dict())
+            else:
+                __current_state_data.state = state
+            self.data[chat] = __current_state_data
+
+    async def get_data(self, chat: str) -> Dict[str, Any]:
+        async with self.__lock:
+            __current_state_data = await self.get_state(chat)
+            if __current_state_data:
+                return __current_state_data.data
+
+    async def set_data(self, chat: str, data: Dict[str, Any]):
+        async with self.__lock:
+            __current_state_data = await self.get_state(chat)
+            if not __current_state_data:
+                __current_state_data = StateData(state="", data=data)
+            else:
+                __current_data = __current_state_data.data
+                __current_data.update(data)
+                __current_state_data.data = __current_data
+
+            self.data[chat] = __current_state_data
+
+    async def clear(self, chat: str):
+        async with self.__lock:
+            try:
+                del self.data[chat]
+            except KeyError:
+                return
+
+
+ChatState = State()
 
 
 class Bot:
@@ -130,7 +185,7 @@ class Bot:
 
         # Очищаем сообщение от упоминания бота
         clean_message = message_text.replace(f"@{self.bot_name}", "").replace(self.bot_name,
-                                                                                "").strip().removeprefix(
+                                                                              "").strip().removeprefix(
             "!")
 
         # Обработка команд

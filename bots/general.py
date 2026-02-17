@@ -1,3 +1,5 @@
+import csv
+import io
 from datetime import datetime
 
 import botsecrets
@@ -80,8 +82,23 @@ class GeneralBot(Bot):
         contaoner = containers.container_by_name('nextcloud_app')
         if not contaoner:
             return "контейнер не найден"
-        res = contaoner.exec_run('php occ talk:bot:list', user="33")
-        return f'{res}'
+        res = contaoner.exec_run('php occ talk:bot:list', user="33", demux=True)
+        res_output = res.output
+        data_bytes = res_output[0]
+        keys = ['id', 'name', 'description', 'error_count', 'state', 'features']
+        data_str = data_bytes.decode('utf-8')
+        data_str = data_str.replace('+----+-------------+--------------+-------------+-------+-------------------+\n', '')
+        data_str = data_str.replace('+----+-------------+--------------+-------------+-------+-------------------+', '')
+        csv_file = io.StringIO(data_str)
+        reader = csv.DictReader(csv_file, delimiter='|')
+        clean = dict()
+        for row in reader:
+            for k, v in row.items():
+                new_key = k.strip()
+                if new_key == '':
+                    continue
+                clean[k.strip()] = v.strip()
+        return f'{clean}'
 
     async def handle_command(self, message: str, user_id: str = None, room_token: str = None) -> str:
         """Обработка команд"""

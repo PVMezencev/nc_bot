@@ -3,6 +3,7 @@ from datetime import datetime
 import botsecrets
 from bots.common import Bot
 from nextcloud.users import get_user_profile
+from devops import containers
 
 
 class GeneralBot(Bot):
@@ -74,6 +75,14 @@ class GeneralBot(Bot):
                 f"Должность: {role}\n"
                 f"Почта: {email}")
 
+    async def handle_docker(self, command_args: list = None, user_id=None) -> str:
+        # docker exec -u 33 nextcloud_app php occ talk:bot:list
+        contaoner = containers.container_by_name('nextcloud_app')
+        if not contaoner:
+            return "контейнер не найден"
+        res = contaoner.exec_run('php occ talk:bot:list', user="33")
+        return f'{res}'
+
     async def handle_command(self, message: str, user_id: str = None, room_token: str = None) -> str:
         """Обработка команд"""
 
@@ -100,6 +109,7 @@ class GeneralBot(Bot):
             "status": self.handle_bot_status,
             "me": self.handle_bot_user_profile,
             "я": self.handle_bot_user_profile,
+            "docker_list": self.handle_docker,
         }
 
         # Выполняем команду

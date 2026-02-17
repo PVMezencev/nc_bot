@@ -28,20 +28,18 @@ async def handle_webhook(
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
 
     # Инициализируем бота.
-    bot = GeneralBot()
+    bot = GeneralBot(config.NEXTCLOUD_URL)
     # Валидация подписи
-    if config.WEBHOOK_SECRET:
-        if not bot.verify_signature(
-                payload,
-                x_nextcloud_talk_signature,
-                x_nextcloud_talk_random,
-                config.WEBHOOK_SECRET
-        ):
-            print(f"❌ Неверная подпись!")
-            print(f"   Random: {x_nextcloud_talk_random}")
-            print(f"   Signature received: {x_nextcloud_talk_signature}")
-            print(f"   Signature calculated: [скрыто]")
-            raise HTTPException(status_code=401, detail="Invalid signature")
+    if not bot.verify_signature(
+            payload,
+            x_nextcloud_talk_signature,
+            x_nextcloud_talk_random,
+    ):
+        print(f"❌ Неверная подпись!")
+        print(f"   Random: {x_nextcloud_talk_random}")
+        print(f"   Signature received: {x_nextcloud_talk_signature}")
+        print(f"   Signature calculated: [скрыто]")
+        raise HTTPException(status_code=401, detail="Invalid signature")
 
     # Логирование входящего запроса
     await bot.log_request(data)

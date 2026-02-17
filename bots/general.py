@@ -1,12 +1,15 @@
 from datetime import datetime
 
+import botsecrets
 from bots.common import Bot
 from nextcloud.users import get_user_profile
 
 
 class GeneralBot(Bot):
-    def __init__(self):
-        super().__init__()
+    def __init__(self, nc_url):
+        self.bot_name = "general_bot"
+        self.bot_token = botsecrets.BOT_SECRETS.get(self.bot_name)
+        super().__init__(self.bot_name, self.bot_token, nc_url)
 
     async def handle_help(self, command_args: list = None, user_id=None) -> str:
         """Обработка команды помощи"""

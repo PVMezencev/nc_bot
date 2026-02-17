@@ -6,31 +6,31 @@ from typing import Dict, Any
 
 import httpx
 
-import config
 import secrets
 
 
 class Bot:
-    def __init__(self):
-        pass
+    def __init__(self, bot_name, bot_token, nc_url):
+        self.bot_name = bot_name
+        self.bot_token = bot_token
+        self.nc_url = nc_url
 
     # Валидация подписи вебхука
     def verify_signature(self,
                          payload: bytes,
                          signature: str,
                          random: str,  # Важно: добавляем параметр random
-                         secret: str
                          ) -> bool:
         """
         Проверка подписи вебхука Nextcloud Talk
         Формат: hash_hmac('sha256', random . body, secret)
         """
-        if not signature or not secret or not random:
+        if not signature or not self.bot_token or not random:
             return False
 
         # Создаем дайджест: random + body
         digest = hmac.new(
-            secret.encode('utf-8'),
+            self.bot_token.encode('utf-8'),
             (random + payload.decode('utf-8')).encode('utf-8'),
             hashlib.sha256
         ).hexdigest()
@@ -41,14 +41,14 @@ class Bot:
     # Функция для отправки сообщений в Nextcloud
     async def send_to_nextcloud(self, room_token: str, message: str, rely_to: int = None, silent=False):
         """Отправка сообщения в Nextcloud Talk"""
-        url = f"{config.NEXTCLOUD_URL}/ocs/v2.php/apps/spreed/api/v1/bot/{room_token}/message"
+        url = f"{self.nc_url}/ocs/v2.php/apps/spreed/api/v1/bot/{room_token}/message"
 
         new_message_id = secrets.token_hex(64)
         # Generate a random header and signature
         RANDOM_HEADER = new_message_id
         MESSAGE_TO_SIGN = f"{RANDOM_HEADER}{message}"
 
-        SECRET = config.WEBHOOK_SECRET  # Укажите ваш секретный ключ
+        SECRET = self.bot_token  # Укажите ваш секретный ключ
 
         SIGNATURE = hmac.new(
             SECRET.encode(),
@@ -120,8 +120,8 @@ class Bot:
 
         # Проверяем, обращено ли сообщение к боту
         bot_mentioned = (
-                f"@{config.BOT_NAME}" in message_text or
-                config.BOT_NAME in message_text or
+                f"@{self.bot_name}" in message_text or
+                self.bot_name in message_text or
                 message_text.startswith("!")
         )
 
@@ -129,7 +129,7 @@ class Bot:
             return
 
         # Очищаем сообщение от упоминания бота
-        clean_message = message_text.replace(f"@{config.BOT_NAME}", "").replace(config.BOT_NAME,
+        clean_message = message_text.replace(f"@{self.bot_name}", "").replace(self.bot_name,
                                                                                 "").strip().removeprefix(
             "!")
 

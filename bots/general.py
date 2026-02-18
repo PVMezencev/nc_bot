@@ -24,7 +24,8 @@ class GeneralBot(Bot):
         self.bot_token = botsecrets.BOT_SECRETS.get(self.bot_name)
         self.state = GeneralState()
         super().__init__(self.bot_name, self.bot_token, nc_url)
-        self.__GENERATE = "<GENERATE>"
+        self.__GENERATE = "<generate>"
+        self.__SUCCESS_INSTALL = "Bot installed"
 
     async def handle_help(self, command_args: list = None, user_id=None, room_token: str = None) -> str:
         """Обработка команды помощи"""
@@ -130,7 +131,8 @@ class GeneralBot(Bot):
 
     def __install_bot(self, bot_name, bot_token="") -> str | None:
         # docker exec -u 33 nextcloud_app php occ talk:bot:install bot_name bot_token https://cloud.zaosmm.ru/bots/bot_name "bot_name"
-
+        print(f'bot_name: {bot_name}')
+        print(f'bot_token: {bot_token}')
         contaoner = containers.container_by_name('nextcloud_app')
         if not contaoner:
             raise Exception("контейнер Nexcloud не найден! Используйте прямой доступ к серверу.")
@@ -138,6 +140,8 @@ class GeneralBot(Bot):
         if bot_token == "":
             import secrets
             bot_token = secrets.token_hex(64)
+
+        print(f'bot_token2: {bot_token}')
 
         try:
             cmd = f'php occ talk:bot:install {bot_name} {bot_token} https://cloud.zaosmm.ru/bots/{bot_name} "{bot_name}"'
@@ -158,7 +162,8 @@ class GeneralBot(Bot):
         except UnicodeDecodeError:
             raise Exception("неизвестная ошибка")
 
-        print(data_str)
+        if data_str != self.__SUCCESS_INSTALL:
+            raise Exception(data_str)
 
         return bot_token
 
@@ -196,6 +201,7 @@ class GeneralBot(Bot):
                         f"Или отправьте {self.__GENERATE} для генерации автоматически.")
             elif current_state == self.state.awaited_bot_token:
                 new_bot_token = command
+                print(f'received new_bot_token: {new_bot_token}')
                 if new_bot_token == self.__GENERATE:
                     new_bot_token = ""
                 new_bot_name = current_data.get("bot_name")
@@ -203,11 +209,13 @@ class GeneralBot(Bot):
                     await ChatState.set_state(user_id, self.state.awaited_bot_name)
                     return "Укажите имя для нового бота, например my_new_bot"
 
-                current_data['bot_token'] = new_bot_token
                 await ChatState.set_state(user_id, self.state.install_bot)
                 await ChatState.set_data(user_id, current_data)
                 await self.send_to_nextcloud(room_token, "Выполняю регистрацию нового бота...")
-                new_bot_token = self.__install_bot(new_bot_name, new_bot_token)
+                try:
+                    new_bot_token = self.__install_bot(new_bot_name, new_bot_token)
+                except Exception as e:
+                    return f'Ошибка: {e}'
                 return f"Новый бот зарегистрирован!\n```\n{new_bot_token}\n```\nСохраните токен."
 
         # Маппинг команд
@@ -225,7 +233,8 @@ class GeneralBot(Bot):
             "status": self.handle_bot_status,
             "me": self.handle_bot_user_profile,
             "я": self.handle_bot_user_profile,
-            "docker_list": self.handle_list_bot,
+            "docker_list": self.handle_list_bot, # @deprecated
+            "bots_list": self.handle_list_bot,
             "new_bot": self.handle_new_bot_request,
         }
 

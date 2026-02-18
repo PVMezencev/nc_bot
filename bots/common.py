@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import json
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 import httpx
 
@@ -19,46 +19,42 @@ class StateData(BaseModel):
 
 class StateContext:
     def __init__(self):
-        self.data: Dict[str, StateData] = dict()
+        self.__data: Dict[str, StateData] = dict()
         self.__lock = asyncio.Lock()
 
-    async def get_state(self, chat: str) -> StateData:
+    async def get_state(self, chat: str) -> str:
         async with self.__lock:
-            return self.data.get(chat)
+            return self.__data.get(chat, StateData(state="", data={})).state
 
     async def set_state(self, chat: str, state: str):
+        print(f'start set state {chat} {state}')
         async with self.__lock:
-            __current_state_data = await self.get_state(chat)
-            if not __current_state_data:
-                __current_state_data = StateData(state=state, data=dict())
+            if chat in self.__data:
+                self.__data[chat].state = state
             else:
-                __current_state_data.state = state
-            self.data[chat] = __current_state_data
+                self.__data[chat] = StateData(state=state, data={})
+        print(f'stop set state {chat} {state}')
 
-    async def get_data(self, chat: str) -> Dict[str, Any]:
+    async def get_data(self, chat: str) -> Optional[Dict[str, Any]]:
+        print(f'start get_data {chat}')
         async with self.__lock:
-            __current_state_data = await self.get_state(chat)
-            if __current_state_data:
-                return __current_state_data.data
+            state_data = self.__data.get(chat)
+            if state_data:
+                print(f'state_data {state_data}')
+                return state_data.data.copy()  # Возвращаем копию
+            print(f'state_data None')
+            return None
 
     async def set_data(self, chat: str, data: Dict[str, Any]):
         async with self.__lock:
-            __current_state_data = await self.get_state(chat)
-            if not __current_state_data:
-                __current_state_data = StateData(state="", data=data)
+            if chat in self.__data:
+                self.__data[chat].data.update(data)
             else:
-                __current_data = __current_state_data.data
-                __current_data.update(data)
-                __current_state_data.data = __current_data
-
-            self.data[chat] = __current_state_data
+                self.__data[chat] = StateData(state="", data=data.copy())
 
     async def clear(self, chat: str):
         async with self.__lock:
-            try:
-                del self.data[chat]
-            except KeyError:
-                return
+            self.__data.pop(chat, None)
 
 
 ChatState = StateContext()

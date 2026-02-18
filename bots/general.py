@@ -235,7 +235,13 @@ class GeneralBot(Bot):
 
     async def handle_list_bot(self, command_args: list = None, user_id=None, room_token: str = None) -> str:
         bots = self.__get_bot_list()
-        return f'{bots}'
+
+        text = """
+                🤖 *Доступные боты:*
+        """
+        for b in bots:
+            text += f'`{b.get("id")}`:\t{b.get("name")}\n'
+        return text
 
     async def handle_new_bot_request(self, command_args: list = None, user_id=None, room_token: str = None):
         await ChatState.set_state(user_id, self.state.awaited_bot_name)

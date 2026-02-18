@@ -26,30 +26,53 @@ class GeneralBot(Bot):
         super().__init__(self.bot_name, self.bot_token, nc_url)
         self.__GENERATE = "<generate>"
         self.__SUCCESS_INSTALL = "Bot installed"
+        self.__SUCCESS_UNINSTALL = "Bot uninstalled"
+        self.__HANDLER_FIELD = 'handler'
+        self.__HELP_TEXT_FIELD = 'help'
+        self.command_handlers = {
+            "помощь": {
+                self.__HANDLER_FIELD: self.handle_help,
+                self.__HELP_TEXT_FIELD: "Вызов этой справки"
+            },
+            "привет": {
+                self.__HANDLER_FIELD: self.handle_greet,
+                self.__HELP_TEXT_FIELD: "Приветствие"
+            },
+            "время": {
+                self.__HANDLER_FIELD: self.handle_time,
+                self.__HELP_TEXT_FIELD: "Время на сервере"
+            },
+            "я": {
+                self.__HANDLER_FIELD: self.handle_bot_user_profile,
+                self.__HELP_TEXT_FIELD: "Мой профиль"
+            },
+            "список_ботов": {
+                self.__HANDLER_FIELD: self.handle_list_bot,
+                self.__HELP_TEXT_FIELD: "Список ботов"
+            },
+            "новый_бот": {
+                self.__HANDLER_FIELD: self.handle_new_bot_request,
+                self.__HELP_TEXT_FIELD: "Запрос на создание нового бота"
+            },
+            "удалить_бота": {
+                self.__HANDLER_FIELD: self.handle_rm_bot_request,
+                self.__HELP_TEXT_FIELD: "Запрос на удаление бота"
+            },
+        }
 
     async def handle_help(self, command_args: list = None, user_id=None, room_token: str = None) -> str:
         """Обработка команды помощи"""
         help_text = """
         🤖 *Доступные команды:*
+"""
+        for cmd, obj in self.command_handlers.items():
+            desc = obj.get(self.__HELP_TEXT_FIELD)
+            help_text += f'• `{cmd}` - {desc}\n'
 
-        *Основные:*
-        • `помощь` - показать это сообщение
-        • `привет` - поздороваться с ботом
-        • `время` - текущее время
-        • `я` - мой профиль
-
-        *Полезные:*
-        • `погода [город]` - прогноз погоды
-        • `курс [валюта]` - курс валюты
-        • `перевод [текст]` - перевод текста
-
-        *Администрирование:*
-        • `бот статус` - статус бота
-        • `бот пользователи` - список пользователей
-        • `бот команды` - все команды
-
-        *Формат:* `!ИмяБота команда параметры`
-        """
+        help_text += '\nОтправка команд боту через !\n'
+        help_text += 'Если восклицательный знак не указан - бот игнорирует текст.\n'
+        help_text += '*Например:*\n'
+        help_text += '`!помощь` или `! помощь` (пробел после ! допускается)\n'
         return help_text
 
     async def handle_greet(self, command_args: list = None, user_id=None, room_token: str = None) -> str:
@@ -129,6 +152,49 @@ class GeneralBot(Bot):
             bots.append(clean)
         return bots
 
+    def __remove_bot(self, bot_name="", bot_id="") -> str | None:
+        if bot_id == "":
+            if bot_name == "":
+                raise Exception("укажите имя бота или его ID")
+            try:
+                exists_bots = self.__get_bot_list()
+            except Exception as e:
+                raise Exception(f'{e}')
+            if not exists_bots:
+                raise Exception("неизвестная ошибка")
+            for bot in exists_bots:
+                if bot.get('name') == bot_name:
+                    bot_id = bot.get('id')
+                    break
+
+        contaoner = containers.container_by_name('nextcloud_app')
+        if not contaoner:
+            raise Exception("контейнер Nexcloud не найден! Используйте прямой доступ к серверу.")
+        try:
+            cmd = f'php occ talk:bot:uninstall {bot_id}'
+            res = contaoner.exec_run(cmd, user="33", demux=True)
+        except APIError as e:
+            raise Exception(f'{e}')
+
+        res_output = res.output
+        if not res_output or not isinstance(res_output, tuple) or len(res_output) == 0:
+            raise Exception("неизвестная ошибка")
+        print(f'res_output: {res_output}')
+        data_bytes = res_output[0]
+        print(f'data_bytes: {data_bytes}')
+        err_bytes = res_output[1]
+        print(f'err_bytes: {err_bytes}')
+        # keys = ['id', 'name', 'description', 'error_count', 'state', 'features']
+        try:
+            data_str = data_bytes.decode('utf-8').strip()
+        except UnicodeDecodeError:
+            raise Exception("неизвестная ошибка")
+
+        if data_str != self.__SUCCESS_UNINSTALL:
+            raise Exception(data_str)
+        # docker exec -u 33 nextcloud_app php occ talk:bot:uninstall bot_id
+        return
+
     def __install_bot(self, bot_name, bot_token="") -> str | None:
         # docker exec -u 33 nextcloud_app php occ talk:bot:install bot_name bot_token https://cloud.zaosmm.ru/bots/bot_name "bot_name"
         print(f'bot_name: {bot_name}')
@@ -158,7 +224,7 @@ class GeneralBot(Bot):
         print(f'err_bytes: {err_bytes}')
         # keys = ['id', 'name', 'description', 'error_count', 'state', 'features']
         try:
-            data_str = data_bytes.decode('utf-8')
+            data_str = data_bytes.decode('utf-8').strip()
         except UnicodeDecodeError:
             raise Exception("неизвестная ошибка")
 
@@ -173,7 +239,11 @@ class GeneralBot(Bot):
 
     async def handle_new_bot_request(self, command_args: list = None, user_id=None, room_token: str = None):
         await ChatState.set_state(user_id, self.state.awaited_bot_name)
-        return "Укажите имя для нового бота, например my_new_bot"
+        return "Укажите имя для нового бота, например my_new_bot (через ! - !my_new_bot)"
+
+    async def handle_rm_bot_request(self, command_args: list = None, user_id=None, room_token: str = None):
+        await ChatState.set_state(user_id, self.state.awaited_bot_id)
+        return "Укажите идентификатор бота для удаления, например !5"
 
     async def handle_command(self, message: str, user_id: str = None, room_token: str = None) -> str:
         """Обработка команд"""
@@ -198,7 +268,7 @@ class GeneralBot(Bot):
                 await ChatState.set_state(user_id, self.state.awaited_bot_token)
                 await ChatState.set_data(user_id, current_data)
                 return (f"Укажите токен для нового бота {command} - случайный набор символов длиной 64-128 символов.\n"
-                        f"Или отправьте {self.__GENERATE} для генерации автоматически.")
+                        f"Или отправьте !{self.__GENERATE} для генерации автоматически.")
             elif current_state == self.state.awaited_bot_token:
                 new_bot_token = command
                 print(f'received new_bot_token: {new_bot_token}')
@@ -216,30 +286,20 @@ class GeneralBot(Bot):
                     new_bot_token = self.__install_bot(new_bot_name, new_bot_token)
                 except Exception as e:
                     return f'Ошибка: {e}'
+                await ChatState.clear(user_id)
                 return f"Новый бот зарегистрирован!\n```\n{new_bot_token}\n```\nСохраните токен."
+            elif current_state == self.state.awaited_bot_id:
 
-        # Маппинг команд
-        command_handlers = {
-            "помощь": self.handle_help,
-            "help": self.handle_help,
-            "привет": self.handle_greet,
-            "hello": self.handle_greet,
-            "время": self.handle_time,
-            "time": self.handle_time,
-            "погода": self.handle_weather,
-            "weather": self.handle_weather,
-            "бот": self.handle_bot_status,
-            "bot": self.handle_bot_status,
-            "status": self.handle_bot_status,
-            "me": self.handle_bot_user_profile,
-            "я": self.handle_bot_user_profile,
-            "docker_list": self.handle_list_bot, # @deprecated
-            "bots_list": self.handle_list_bot,
-            "new_bot": self.handle_new_bot_request,
-        }
+                await self.send_to_nextcloud(room_token, "Выполняю удаление бота...")
+                try:
+                    self.__remove_bot(bot_id=command)
+                except Exception as e:
+                    return f'Ошибка: {e}'
+                await ChatState.clear(user_id)
+                return f"Бот удален."
 
         # Выполняем команду
-        handler = command_handlers.get(command)
+        handler = self.command_handlers.get(command).get('handler')
         if handler:
             return await handler(args, user_id, room_token)
         else:

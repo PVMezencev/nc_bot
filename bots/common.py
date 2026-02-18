@@ -17,7 +17,7 @@ class StateData(BaseModel):
     state: str
 
 
-class State:
+class StateContext:
     def __init__(self):
         self.data: Dict[str, StateData] = dict()
         self.__lock = asyncio.Lock()
@@ -61,7 +61,7 @@ class State:
                 return
 
 
-ChatState = State()
+ChatState = StateContext()
 
 
 class Bot:

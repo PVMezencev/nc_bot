@@ -199,3 +199,7 @@ class Bot:
     async def handle_unknown(self, command: str, user_id=None) -> str:
         """Неизвестная команда"""
         return f"❌ Неизвестная команда: `{command}`\nИспользуйте `!помощь` для списка команд."
+
+    async def forbidden(self, user_id=None) -> str:
+        """Неизвестная команда"""
+        return f"❌ Доступ запрещён!"

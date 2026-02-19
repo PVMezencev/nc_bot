@@ -1,7 +1,7 @@
 import csv
 import io
 from datetime import datetime
-from typing import Dict, List
+from typing import List
 
 from docker.errors import APIError
 
@@ -32,6 +32,7 @@ class GeneralBot(Bot):
         self.__SUCCESS_UNINSTALL = "Bot uninstalled"
         self.__HANDLER_FIELD = 'handler'
         self.__HELP_TEXT_FIELD = 'help'
+        self.__ACCESS_FIELD = 'access'
         self.command_handlers = {
             "помощь": {
                 self.__HANDLER_FIELD: self.handle_help,
@@ -51,19 +52,36 @@ class GeneralBot(Bot):
             },
             "список_ботов": {
                 self.__HANDLER_FIELD: self.handle_list_bot,
-                self.__HELP_TEXT_FIELD: "Список ботов"
+                self.__HELP_TEXT_FIELD: "Список ботов",
+                self.__ACCESS_FIELD: [
+                    "3A5D0454-58BC-4A83-9744-BE34B4292471",  # Кульнев ПВ
+                    "14B319D2-459F-43FA-A61B-9197872A6FD2",  # Мезенцев ПВ
+                    "pvmezencev",
+                ]
             },
             "новый_бот": {
                 self.__HANDLER_FIELD: self.handle_new_bot_request,
-                self.__HELP_TEXT_FIELD: "Запускает сценарий регистрации нового бота"
+                self.__HELP_TEXT_FIELD: "Запускает сценарий регистрации нового бота",
+                self.__ACCESS_FIELD: [
+                    "3A5D0454-58BC-4A83-9744-BE34B4292471",  # Кульнев ПВ
+                    "pvmezencev",
+                ]
             },
             "удалить_бота": {
                 self.__HANDLER_FIELD: self.handle_rm_bot_request,
-                self.__HELP_TEXT_FIELD: "Запускает сценарий удаление бота"
+                self.__HELP_TEXT_FIELD: "Запускает сценарий удаление бота",
+                self.__ACCESS_FIELD: [
+                    "3A5D0454-58BC-4A83-9744-BE34B4292471",  # Кульнев ПВ
+                    "pvmezencev",
+                ]
             },
             "сотрудник": {
                 self.__HANDLER_FIELD: self.handle_search_users_request,
-                self.__HELP_TEXT_FIELD: "Запускает сценарий поиска сотрудника"
+                self.__HELP_TEXT_FIELD: "Запускает сценарий поиска сотрудника",
+                self.__ACCESS_FIELD: [
+                    "3A5D0454-58BC-4A83-9744-BE34B4292471",  # Кульнев ПВ
+                    "pvmezencev",
+                ]
             },
         }
 
@@ -326,10 +344,14 @@ class GeneralBot(Bot):
 
         # Выполняем команду
         handler = None
-        cmd = self.command_handlers.get(command).get('handler')
+        cmd = self.command_handlers.get(command)
         if cmd:
-            handler = self.command_handlers.get(command).get('handler')
+            handler = self.command_handlers.get(command).get(self.__HANDLER_FIELD)
         if handler:
+            access = self.command_handlers.get(command).get(self.__ACCESS_FIELD)
+            if access and len(access) > 0:
+                if user_id not in access:
+                    return await self.forbidden(user_id)
             return await handler(args, user_id, room_token)
         else:
             # Проверяем комбинированные команды типа "бот статус"

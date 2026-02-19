@@ -85,15 +85,6 @@ class GeneralBot(Bot):
         now = datetime.now()
         return f"🕐 Текущее время: {now.strftime('%H:%M:%S %d.%m.%Y')} UTC"
 
-    async def handle_weather(self, command_args: list = None, user_id=None, room_token: str = None) -> str:
-        """Прогноз погоды"""
-        if not command_args:
-            return "Укажите город. Пример: `погода Москва`"
-
-        city = ' '.join(command_args)
-        # Здесь можно добавить вызов API погоды
-        return f"🌤️ Погода для {city}: +18°C, солнечно (шутка)"
-
     async def handle_bot_status(self, command_args: list = None, user_id=None, room_token: str = None) -> str:
         """Статус бота"""
         return "✅ Бот работает нормально\nВерсия: 1.0.0\nВремя работы: 24/7"

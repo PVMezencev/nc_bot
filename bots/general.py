@@ -9,6 +9,7 @@ import botsecrets
 from bots.common import Bot, ChatState
 from nextcloud.users import get_user_profile
 from devops import containers
+from repo.mongo import Users
 
 
 class GeneralState:
@@ -16,10 +17,12 @@ class GeneralState:
     awaited_bot_token = "awaited_bot_token"
     awaited_bot_id = "awaited_bot_id"
     install_bot = "install_bot"
+    awaited_user_name = "awaited_user_name"
 
 
 class GeneralBot(Bot):
-    def __init__(self, nc_url):
+    def __init__(self, nc_url, users_repo: Users):
+        self.users_repo = users_repo
         self.bot_name = "general_bot"
         self.bot_token = botsecrets.BOT_SECRETS.get(self.bot_name)
         self.state = GeneralState()
@@ -57,6 +60,10 @@ class GeneralBot(Bot):
             "удалить_бота": {
                 self.__HANDLER_FIELD: self.handle_rm_bot_request,
                 self.__HELP_TEXT_FIELD: "Запускает сценарий удаление бота"
+            },
+            "сотрудник": {
+                self.__HANDLER_FIELD: self.handle_search_users_request,
+                self.__HELP_TEXT_FIELD: "Запускает сценарий поиска сотрудника"
             },
         }
 
@@ -297,6 +304,26 @@ class GeneralBot(Bot):
                 await ChatState.clear(user_id)
                 return f"Бот удален."
 
+            elif current_state == self.state.awaited_user_name:
+
+                await self.send_to_nextcloud(room_token, "🔎 Выполняю поиск сотрудника...")
+                try:
+                    users = await self.users_repo.search_users(command)
+                except Exception as e:
+                    return f'Ошибка: {e}'
+                await ChatState.clear(user_id)
+
+                text = """
+        ✍ *Найденные сотрудники:*
+"""
+                for u in users:
+                    text += f'ФИО: {u.get("displayname")}\n'
+                    text += f'Телефон: {u.get("phone")}\n'
+                    text += f'Руководитель: {u.get("manager")}\n'
+                    text += f'Группы: {",".join(u.get("groups"))}\n'
+                    text += f'ID: {u.get("id")}\n'
+                return text
+
         # Выполняем команду
         handler = self.command_handlers.get(command).get('handler')
         if handler:
@@ -309,3 +336,7 @@ class GeneralBot(Bot):
                     return await self.handle_bot_status(args[1:])
 
             return await self.handle_unknown(command)
+
+    async def handle_search_users_request(self, command_args: list = None, user_id=None, room_token: str = None):
+        await ChatState.set_state(user_id, self.state.awaited_user_name)
+        return "Укажите часть имени пользователя (через ! - !иванов)"

@@ -7,6 +7,7 @@ from bots.general import GeneralBot
 import config
 from repo.mongo import Users
 
+mongo_users_repo = Users(connection=config.MONGODB_CONNECTION)
 
 app = FastAPI(
     title="Nextcloud Talk Bot",
@@ -30,7 +31,7 @@ async def handle_webhook(
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
 
     # Инициализируем бота.
-    bot = GeneralBot(config.NEXTCLOUD_URL)
+    bot = GeneralBot(config.NEXTCLOUD_URL, users_repo=mongo_users_repo)
     # Валидация подписи
     if not bot.verify_signature(
             payload,

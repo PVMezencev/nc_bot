@@ -134,15 +134,19 @@ class GeneralBot(Bot):
             elif current_state == self.state.awaited_bot_id:
 
                 await self.send_to_nextcloud(room_token, "Выполняю удаление бота...")
+
+                deleted_bot = self.__get_bot(bot_id=command)
+                if not deleted_bot:
+                    return "Бот не найден"
+                bot_name = deleted_bot.get("name")
                 try:
-                    self.__remove_bot(bot_id=command)
+                    self.__remove_bot(bot_name=bot_name, bot_id=command)
                 except Exception as e:
                     return f'Ошибка: {e}'
+
+                self.__del_bot_from_secret(bot_name)
+
                 await ChatState.clear(user_id)
-                deleted_bot = self.__get_bot(bot_id=command)
-
-                self.__del_bot_from_secret(deleted_bot.get("name"))
-
                 return f"Бот удален."
 
             elif current_state == self.state.awaited_user_name:
@@ -267,10 +271,11 @@ class GeneralBot(Bot):
             raise Exception(f'{e}')
         if not exists_bots:
             raise Exception("неизвестная ошибка")
+
         for bot in exists_bots:
             if bot.get('name') == bot_name:
                 return bot
-            if bot.get('id') == bot_id:
+            if bot.get('id') == f'{bot_id}':
                 return bot
 
     def __install_bot(self, bot_name, bot_token="") -> str | None:

@@ -5,6 +5,8 @@ from fastapi import FastAPI, Request, HTTPException, Header
 from bots.general import GeneralBot
 # Конфигурация
 import config
+from repo.mongo import Users
+
 
 app = FastAPI(
     title="Nextcloud Talk Bot",

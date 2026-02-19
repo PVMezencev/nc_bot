@@ -325,7 +325,10 @@ class GeneralBot(Bot):
                 return text
 
         # Выполняем команду
-        handler = self.command_handlers.get(command).get('handler')
+        handler = None
+        cmd = self.command_handlers.get(command).get('handler')
+        if cmd:
+            handler = self.command_handlers.get(command).get('handler')
         if handler:
             return await handler(args, user_id, room_token)
         else:

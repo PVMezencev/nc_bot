@@ -317,11 +317,11 @@ class GeneralBot(Bot):
         ✍ *Найденные сотрудники:*
 """
                 for u in users:
-                    text += f'ФИО: {u.get("displayname")}\n'
-                    text += f'Телефон: {u.get("phone")}\n'
-                    text += f'Руководитель: {u.get("manager")}\n'
-                    text += f'Группы: {",".join(u.get("groups"))}\n'
-                    text += f'ID: {u.get("id")}\n'
+                    text += f'ФИО:\t{u.get("displayname")}\n'
+                    text += f'Телефон:\t{u.get("phone")}\n'
+                    text += f'Руководитель:\t{u.get("manager")}\n'
+                    text += f'Группы:\t{",".join(u.get("groups"))}\n'
+                    text += f'ID:\t`{u.get("id")}`\n'
                 return text
 
         # Выполняем команду

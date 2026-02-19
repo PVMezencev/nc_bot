@@ -1,3 +1,4 @@
+import asyncio
 from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException, Header
@@ -66,3 +67,5 @@ if __name__ == "__main__":
         port=config.APP_PORT,
         log_level="info",
     )
+
+    asyncio.run(mongo_users_repo.close())

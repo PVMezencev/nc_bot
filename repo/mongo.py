@@ -272,10 +272,7 @@ class Users:
             users = await self.get_users(skip=0, limit=500, displayname={"$regex": like_name, "$options": "i"}, )
         else:
             users = await self.get_users()
-        await self.close()
         return users
 
     async def user(self, id):
-        user = await self.get_user(id)
-        await self.close()
-        return user
+        return await self.get_user(id)

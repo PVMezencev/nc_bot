@@ -55,7 +55,6 @@ class GeneralBot(Bot):
                 self.__HELP_TEXT_FIELD: "Список ботов",
                 self.__ACCESS_FIELD: [
                     "3A5D0454-58BC-4A83-9744-BE34B4292471",  # Кульнев ПВ
-                    "14B319D2-459F-43FA-A61B-9197872A6FD2",  # Мезенцев ПВ
                     "pvmezencev",
                 ]
             },

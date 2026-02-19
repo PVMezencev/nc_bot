@@ -140,7 +140,7 @@ class Bot:
             "room": data.get("room", {}).get("token"),
             "message_preview": str(data.get("message", {}).get("message", ""))[:50]
         }
-        print(f"Webhook received: {json.dumps(log_entry, ensure_ascii=False)}")
+        print(f"Webhook received: {json.dumps(data, ensure_ascii=False)}")
 
     async def handle_command(self, message: str, user_id: str = None, room_token: str = None) -> str:
         print(f'implement me for bot {self.__class__}')

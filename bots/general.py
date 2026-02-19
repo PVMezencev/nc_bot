@@ -52,11 +52,11 @@ class GeneralBot(Bot):
             },
             "новый_бот": {
                 self.__HANDLER_FIELD: self.handle_new_bot_request,
-                self.__HELP_TEXT_FIELD: "Запрос на создание нового бота"
+                self.__HELP_TEXT_FIELD: "Запускает сценарий регистрации нового бота"
             },
             "удалить_бота": {
                 self.__HANDLER_FIELD: self.handle_rm_bot_request,
-                self.__HELP_TEXT_FIELD: "Запрос на удаление бота"
+                self.__HELP_TEXT_FIELD: "Запускает сценарий удаление бота"
             },
         }
 
@@ -73,6 +73,7 @@ class GeneralBot(Bot):
         help_text += 'Если восклицательный знак не указан - бот игнорирует текст.\n'
         help_text += '*Например:*\n'
         help_text += '`!помощь` или `! помощь` (пробел после ! допускается)\n'
+        help_text += '\nЕсли запускаем сценарий, то последующие требуемые ботом данные тоже нужно отправлять через !\n'
         return help_text
 
     async def handle_greet(self, command_args: list = None, user_id=None, room_token: str = None) -> str:
@@ -264,6 +265,7 @@ class GeneralBot(Bot):
 
         current_state = await ChatState.get_state(user_id)
         if current_state:
+            # Если запущен сценарий - отрабатываем его.
             current_data = await ChatState.get_data(user_id)
             if not current_data:
                 current_data = {}

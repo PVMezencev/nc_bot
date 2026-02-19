@@ -57,6 +57,7 @@ async def handle_webhook(
     return response
 
 
+
 # Запуск приложения
 if __name__ == "__main__":
     import uvicorn

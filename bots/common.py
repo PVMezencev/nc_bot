@@ -61,10 +61,16 @@ ChatState = StateContext()
 
 
 class Bot:
-    def __init__(self, bot_name, bot_token, nc_url):
+    def __init__(self, bot_name, nc_url):
         self.bot_name = bot_name
-        self.bot_token = bot_token
         self.nc_url = nc_url
+        self.HANDLER_FIELD = 'handler'
+        self.HELP_TEXT_FIELD = 'help'
+        self.ACCESS_FIELD = 'access'
+        self.command_handlers = {}
+
+        import botsecrets
+        self.bot_token = botsecrets.BOT_SECRETS.get(self.bot_name)
 
     # Валидация подписи вебхука
     def verify_signature(self,
@@ -142,9 +148,43 @@ class Bot:
         }
         print(f"Webhook received: {json.dumps(data, ensure_ascii=False)}")
 
+    async def handle_state(self, user_id, room_token, command) -> str | None:
+        return
+
     async def handle_command(self, message: str, user_id: str = None, room_token: str = None) -> str:
-        print(f'implement me for bot {self.__class__}')
-        return ""
+        """Обработка команд"""
+
+        # Извлекаем команду и аргументы
+        parts = message.split()
+        if not parts:
+            return ""
+
+        command = parts[0].lower().strip()
+        args = parts[1:] if len(parts) > 1 else []
+
+        state_result = await self.handle_state(user_id, room_token, command)
+        if state_result:
+            return state_result
+
+        # Выполняем команду
+        handler = None
+        cmd = self.command_handlers.get(command)
+        if cmd:
+            handler = self.command_handlers.get(command).get(self.HANDLER_FIELD)
+        if handler:
+            access = self.command_handlers.get(command).get(self.ACCESS_FIELD)
+            if access and len(access) > 0:
+                if user_id not in access:
+                    return await self.forbidden(user_id)
+            return await handler(args, user_id, room_token)
+        else:
+            # Проверяем комбинированные команды типа "бот статус"
+            if command == "бот" and args:
+                sub_command = args[0].lower()
+                if sub_command == "статус":
+                    return await self.handle_bot_status(args[1:])
+
+            return await self.handle_unknown(command)
 
     async def process_message(self, data: Dict[str, Any]) -> Dict[str, Any] | None:
         """Обработка входящего сообщения"""
@@ -203,3 +243,16 @@ class Bot:
     async def forbidden(self, user_id=None) -> str:
         """Неизвестная команда"""
         return f"❌ Доступ запрещён!"
+
+    async def handle_greet(self, command_args: list = None, user_id=None, room_token: str = None) -> str:
+        """Приветствие"""
+        return "Привет! 👋 Я бот ЗАО СММ. Напишите `!помощь` для списка команд."
+
+    async def handle_time(self, command_args: list = None, user_id=None, room_token: str = None) -> str:
+        """Текущее время"""
+        now = datetime.now()
+        return f"🕐 Текущее время: {now.strftime('%H:%M:%S %d.%m.%Y')} UTC"
+
+    async def handle_bot_status(self, command_args: list = None, user_id=None, room_token: str = None) -> str:
+        """Статус бота"""
+        return "✅ Бот работает нормально\nВерсия: 1.0.0\nВремя работы: 24/7"

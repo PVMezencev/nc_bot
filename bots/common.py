@@ -162,15 +162,12 @@ class Bot:
         command = parts[0].lower().strip()
         args = parts[1:] if len(parts) > 1 else []
 
-        state_result = await self.handle_state(user_id, room_token, command)
-        if state_result:
-            return state_result
-
         # Выполняем команду
         handler = None
         cmd = self.command_handlers.get(command)
         if cmd:
             handler = self.command_handlers.get(command).get(self.HANDLER_FIELD)
+
         if handler:
             access = self.command_handlers.get(command).get(self.ACCESS_FIELD)
             if access and len(access) > 0:
@@ -178,6 +175,10 @@ class Bot:
                     return await self.forbidden(user_id)
             return await handler(args, user_id, room_token)
         else:
+            state_result = await self.handle_state(user_id, room_token, command)
+            if state_result:
+                return state_result
+
             # Проверяем комбинированные команды типа "бот статус"
             if command == "бот" and args:
                 sub_command = args[0].lower()

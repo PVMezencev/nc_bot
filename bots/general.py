@@ -87,6 +87,10 @@ class GeneralBot(Bot):
                     "pvmezencev",
                 ]
             },
+            "сброс": {
+                self.HANDLER_FIELD: self.handle_clean_state_request,
+                self.HELP_TEXT_FIELD: "Отменяет сценарии",
+            },
         }
 
     async def handle_state(self, user_id, room_token, command) -> str | None:
@@ -333,6 +337,10 @@ class GeneralBot(Bot):
 
         await self.send_to_nextcloud(room_token, "⚠ Перезапуск бота!")
         sys.exit(0)
+
+    async def handle_clean_state_request(self, command_args: list = None, user_id=None, room_token: str = None):
+        await ChatState.clear(user_id)
+        return "Сценарии отменены"
 
     def __update_botssecret(self, bots: dict):
         try:

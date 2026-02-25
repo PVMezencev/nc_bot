@@ -20,12 +20,12 @@ class GeneralState:
     awaited_user_name = "awaited_user_name"
 
 
-GENERAL_BOT = "general_bot"
+BOT_NAME_GENERAL = "bot_general"
 
 
 class GeneralBot(Bot):
     def __init__(self, nc_url, users_repo: Users):
-        self.bot_name = GENERAL_BOT
+        self.bot_name = BOT_NAME_GENERAL
         super().__init__(self.bot_name, nc_url)
 
         self.state = GeneralState()

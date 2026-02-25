@@ -7,12 +7,12 @@ class ExampleState:
     awaited_bot_name = "awaited_example"
 
 
-EXAMPLE_BOT = "example_bot"
+BOT_NAME_EXAMPLE = "bot_example"
 
 
 class ExampleBot(Bot):
     def __init__(self, nc_url):
-        self.bot_name = EXAMPLE_BOT  # Указываем имя, которе дали боту при регистрации.
+        self.bot_name = BOT_NAME_EXAMPLE  # Указываем имя, которе дали боту при регистрации.
         # Токен бота автоматически загрузится из botsecrets.py
         super().__init__(self.bot_name, nc_url)
 

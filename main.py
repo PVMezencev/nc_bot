@@ -3,8 +3,8 @@ from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException, Header
 
-from bots.general import GeneralBot, GENERAL_BOT
-from bots.example import ExampleBot, EXAMPLE_BOT
+from bots.general import GeneralBot, BOT_NAME_GENERAL
+from bots.example import ExampleBot, BOT_NAME_EXAMPLE
 
 # Конфигурация
 import config
@@ -35,9 +35,9 @@ async def handle_webhook(
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
 
     # Инициализируем бота.
-    if bot_name == GENERAL_BOT:
+    if bot_name == BOT_NAME_GENERAL:
         bot = GeneralBot(config.NEXTCLOUD_URL, users_repo=mongo_users_repo)
-    elif bot_name == EXAMPLE_BOT:
+    elif bot_name == BOT_NAME_EXAMPLE:
         bot = ExampleBot(config.NEXTCLOUD_URL)
     else:
         raise HTTPException(status_code=404, detail=f"неизвестный бот {bot_name}")

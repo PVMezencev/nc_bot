@@ -24,9 +24,11 @@ class ScriptsBot(Bot):
             script_name = f'{script_name}.py'
 
         if script_name == "example.py":
-            script_path = os.path.join(os.getcwd(), "scripts_examples/entry-point-example.py")
+            script_path = os.path.join(os.getcwd(), "scripts_examples", "example.py")
+            cwd = os.path.join(os.getcwd(), "scripts_examples")
         else:
             script_path = os.path.join(self.script_dir, script_name)
+            cwd = self.script_dir
 
         if not os.path.exists(script_path):
             return f"{script_path} - не найден в каталоге скриптов."
@@ -40,7 +42,7 @@ class ScriptsBot(Bot):
             limit=1024 * 1024,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=self.script_dir,
+            cwd=cwd,
         )
 
         response = ""

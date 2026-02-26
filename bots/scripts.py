@@ -43,6 +43,17 @@ class ScriptsBot(Bot):
             print(f'{datetime.now().isoformat("T")}: {e}')
             return
 
+        if user_id not in [
+                    "3A5D0454-58BC-4A83-9744-BE34B4292471",  # Кульнев ПВ
+                    "pvmezencev",
+                ]:
+            return {
+                "message": f"Доступ запрещён",
+                "replyTo": message_id,
+                "room_token": room_token,
+                "silent": False
+            }
+
         message_text = message_text.strip()
         if message_text == "{file}":
             parameters = message_obj.get("parameters", {})

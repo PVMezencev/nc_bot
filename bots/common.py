@@ -139,13 +139,6 @@ class Bot:
 
     # Функция логирования
     async def log_request(self, data: Dict[str, Any]):
-        """Логирование входящих запросов"""
-        log_entry = {
-            "timestamp": datetime.now().isoformat(),
-            "user": data.get("user", {}).get("id"),
-            "room": data.get("room", {}).get("token"),
-            "message_preview": str(data.get("message", {}).get("message", ""))[:50]
-        }
         print(f"Webhook received: {json.dumps(data, ensure_ascii=False)}")
 
     async def handle_state(self, user_id, room_token, command) -> str | None:
@@ -193,7 +186,7 @@ class Bot:
         try:
             message_json = data.get("object", {}).get("content", "").strip()
             message_obj = json.loads(message_json)
-            message_text = message_obj.get("message", "").strip()
+            message_text = message_obj.get("message", "")
             user_id_data = data.get("actor", {}).get("id", "")
             tails = user_id_data.split("/")
             if len(tails) > 1:
@@ -206,6 +199,8 @@ class Bot:
         except Exception as e:
             print(f'{datetime.now().isoformat("T")}: {e}')
             return
+
+        message_text = message_text.strip()
         # Игнорируем сообщения без текста или от ботов
         if not message_text or user_id.startswith("bot-"):
             return

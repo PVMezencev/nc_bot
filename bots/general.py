@@ -31,8 +31,8 @@ class GeneralBot(Bot):
         self.state = GeneralState()
         self.users_repo = users_repo
         self.__GENERATE = "<generate>"
-        self.__SUCCESS_INSTALL = "Bot installed"
-        self.__SUCCESS_UNINSTALL = "Bot uninstalled"
+        self.__SUCCESS_INSTALLED = "Bot installed"
+        self.__SUCCESS_UNINSTALLED = "Bot uninstalled"
         self.command_handlers = {
             "помощь": {
                 self.HANDLER_FIELD: self.handle_help,
@@ -314,7 +314,8 @@ class GeneralBot(Bot):
         except UnicodeDecodeError:
             raise Exception("неизвестная ошибка")
 
-        if data_str != self.__SUCCESS_INSTALL:
+        data_str = str(data_str)
+        if not data_str.startswith(self.__SUCCESS_INSTALLED):
             raise Exception(data_str)
 
         return bot_token

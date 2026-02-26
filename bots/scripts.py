@@ -22,7 +22,11 @@ class ScriptsBot(Bot):
         script_name = params[0]
         if not script_name.endswith(".py"):
             script_name = f'{script_name}.py'
-        script_path = os.path.join(self.script_dir, script_name)
+
+        if script_name == "example.py":
+            script_path = os.path.join(os.getcwd(), "scripts_examples/entry-point-example.py")
+        else:
+            script_path = os.path.join(self.script_dir, script_name)
 
         if not os.path.exists(script_path):
             return f"{script_path} - не найден в каталоге скриптов."
@@ -39,19 +43,20 @@ class ScriptsBot(Bot):
             cwd=self.script_dir,
         )
 
+        response = ""
         while True:
             data = await proc.stdout.readline()
             if not data:
                 err = await proc.stderr.readline()
                 if err:
                     line = err.decode()
-                    # TODO: send error
+                    response += f"\nERR: {line}"
                     continue
                 break
             line = data.decode()
-            # TODO: send response
+            response += f"\n{line}"
 
-        return ""
+        return response.strip()
 
     async def handle_unknown(self, command: str, user_id=None) -> str:
         """Неизвестная команда"""

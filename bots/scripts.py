@@ -76,7 +76,7 @@ class ScriptsBot(Bot):
                         "room_token": room_token,
                         "silent": False
                     }
-                shutil.rmtree(zip_file)
+                os.remove(zip_file)
                 result = await self.__deploy(self.script_dir)
                 return {
                     "message": f"результат развёртывания архива скриптов: {result}",
@@ -173,6 +173,7 @@ class ScriptsBot(Bot):
         return f"❌ Неизвестная команда: `{command}`\nИспользуйте `!имя_скрипта [список аргументов через пробел]`."
 
     async def __run_cmd(self, cmd):
+        print(f'run_cmd: {cmd}')
         proc = await asyncio.create_subprocess_shell(
             cmd,
             stdout=asyncio.subprocess.PIPE,

@@ -1,6 +1,7 @@
 .venv/
 .idea/
 __pycache__/
+scripts_for_bot/
 
 config*.py
 botsecrets.py

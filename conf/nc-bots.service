@@ -6,9 +6,9 @@ After=network.target
 Type=simple
 User=administrator
 Group=administrator
-WorkingDirectory=/home/administrator/projects
-Environment=PATH=/home/administrator/projects/.venv/bin
-ExecStart=/home/administrator/projects/.venv/bin/python /home/administrator/projects/app.py
+WorkingDirectory=/home/administrator/projects/nc_bot
+Environment=PATH=/home/administrator/projects/nc_bot/.venv/bin
+ExecStart=/home/administrator/projects/nc_bot/.venv/bin/python /home/administrator/projects/nc_bot/main.py
 Restart=always
 RestartSec=5
 StandardOutput=journal

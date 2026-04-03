@@ -10,5 +10,5 @@ NEXTCLOUD_API_PASSWORD = os.getenv("NEXTCLOUD_API_PASSWORD", "api_user_password"
 
 MONGODB_CONNECTION = os.getenv("MONGODB_CONNECTION", "mongodb://administrator:example@mongo:27017/")
 
-APP_HOST = os.getenv("LOG_LEVEL", "0.0.0.0")
+APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = os.getenv("APP_PORT", 8000)

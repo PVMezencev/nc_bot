@@ -1,0 +1,18 @@
+[Unit]
+Description=Nextcloud Bots Application
+After=network.target
+
+[Service]
+Type=simple
+User=administrator
+Group=administrator
+WorkingDirectory=/home/administrator/projects
+Environment=PATH=/home/administrator/projects/.venv/bin
+ExecStart=/home/administrator/projects/.venv/bin/python /home/administrator/projects/app.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -3,7 +3,8 @@
 __pycache__/
 scripts_for_bot/
 
+.env
 config*.py
 botsecrets.py
 
-compose-mongo.yaml
+tmp/

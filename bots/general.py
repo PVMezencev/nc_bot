@@ -54,42 +54,27 @@ class GeneralBot(Bot):
             "список_ботов": {
                 self.HANDLER_FIELD: self.handle_list_bot,
                 self.HELP_TEXT_FIELD: "Список ботов",
-                self.ACCESS_FIELD: [
-                    "3A5D0454-58BC-4A83-9744-BE34B4292471",  # Кульнев ПВ
-                    "pvmezencev",
-                ]
+                self.ACCESS_FIELD: config.ADMINS
             },
             "новый_бот": {
                 self.HANDLER_FIELD: self.handle_new_bot_request,
                 self.HELP_TEXT_FIELD: "Запускает сценарий регистрации нового бота",
-                self.ACCESS_FIELD: [
-                    "3A5D0454-58BC-4A83-9744-BE34B4292471",  # Кульнев ПВ
-                    "pvmezencev",
-                ]
+                self.ACCESS_FIELD: config.ADMINS
             },
             "удалить_бота": {
                 self.HANDLER_FIELD: self.handle_rm_bot_request,
                 self.HELP_TEXT_FIELD: "Запускает сценарий удаление бота",
-                self.ACCESS_FIELD: [
-                    "3A5D0454-58BC-4A83-9744-BE34B4292471",  # Кульнев ПВ
-                    "pvmezencev",
-                ]
+                self.ACCESS_FIELD: config.ADMINS
             },
             "сотрудник": {
                 self.HANDLER_FIELD: self.handle_search_users_request,
                 self.HELP_TEXT_FIELD: "Запускает сценарий поиска сотрудника",
-                self.ACCESS_FIELD: [
-                    "3A5D0454-58BC-4A83-9744-BE34B4292471",  # Кульнев ПВ
-                    "pvmezencev",
-                ]
+                self.ACCESS_FIELD: config.ADMINS
             },
             "перезапуск": {
                 self.HANDLER_FIELD: self.handle_restart_request,
                 self.HELP_TEXT_FIELD: "Выключает бота (запуск автоматически)",
-                self.ACCESS_FIELD: [
-                    "3A5D0454-58BC-4A83-9744-BE34B4292471",  # Кульнев ПВ
-                    "pvmezencev",
-                ]
+                self.ACCESS_FIELD: config.ADMINS
             },
             "сброс": {
                 self.HANDLER_FIELD: self.handle_clean_state_request,

@@ -242,7 +242,7 @@ class Bot:
 
     async def handle_greet(self, command_args: list = None, user_id=None, room_token: str = None) -> str:
         """Приветствие"""
-        return "Привет! 👋 Я бот ЗАО СММ. Напишите `!помощь` для списка команд."
+        return "Привет! 👋 Я бот. Напишите `!помощь` для списка команд."
 
     async def handle_time(self, command_args: list = None, user_id=None, room_token: str = None) -> str:
         """Текущее время"""

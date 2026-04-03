@@ -1,5 +1,6 @@
 from datetime import datetime
 
+import config
 from bots.common import Bot
 
 
@@ -33,10 +34,7 @@ class ExampleBot(Bot):
             "время_по_доступу": {
                 self.HANDLER_FIELD: self.handle_time,
                 self.HELP_TEXT_FIELD: "Время на сервере только определенным сотруникам",
-                self.ACCESS_FIELD: [
-                    "3A5D0454-58BC-4A83-9744-BE34B4292471",  # Кульнев ПВ
-                    "pvmezencev",
-                ]
+                self.ACCESS_FIELD: config.NEXTCLOUD_URL
             },
         }
 
@@ -58,7 +56,7 @@ class ExampleBot(Bot):
 
     async def handle_greet(self, command_args: list = None, user_id=None, room_token: str = None) -> str:
         """Приветствие"""
-        return "Привет! 👋 Я бот ЗАО СММ. Напишите `!помощь` для списка команд."
+        return "Привет! 👋 Я бот. Напишите `!помощь` для списка команд."
 
     async def handle_time(self, command_args: list = None, user_id=None, room_token: str = None) -> str:
         """Текущее время"""

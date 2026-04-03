@@ -12,3 +12,9 @@ MONGODB_CONNECTION = os.getenv("MONGODB_CONNECTION", "mongodb://administrator:ex
 
 APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = os.getenv("APP_PORT", 8000)
+
+ADMINS = [
+    "admin1",
+    "admin2",
+    "admin3",
+]

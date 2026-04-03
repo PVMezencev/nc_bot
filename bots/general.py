@@ -6,6 +6,7 @@ from typing import List
 
 from docker.errors import APIError
 
+import config
 from bots.common import Bot, ChatState
 from nextcloud.users import get_user_profile
 from devops import containers
@@ -282,7 +283,7 @@ class GeneralBot(Bot):
                 return bot
 
     def __install_bot(self, bot_name, bot_token="") -> str | None:
-        # docker exec -u 33 nextcloud_app php occ talk:bot:install bot_name bot_token https://cloud.zaosmm.ru/bots/bot_name "bot_name"
+        # docker exec -u 33 nextcloud_app php occ talk:bot:install bot_name bot_token https://cloud.uchi.red/bots/bot_name "bot_name"
         print(f'bot_name: {bot_name}')
         print(f'bot_token: {bot_token}')
         contaoner = containers.container_by_name('nextcloud_app')
@@ -296,7 +297,7 @@ class GeneralBot(Bot):
         print(f'bot_token2: {bot_token}')
 
         try:
-            cmd = f'php occ talk:bot:install {bot_name} {bot_token} https://cloud.zaosmm.ru/bots/{bot_name} "{bot_name}"'
+            cmd = f'php occ talk:bot:install {bot_name} {bot_token} {config.NEXTCLOUD_URL}/bots/{bot_name} "{bot_name}"'
             res = contaoner.exec_run(cmd, user="33", demux=True)
         except APIError as e:
             raise Exception(f'{e}')

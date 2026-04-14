@@ -92,7 +92,7 @@ class GeneralBot(Bot):
                 current_data = {}
             if current_state == self.state.awaited_bot_name:
                 if command == "":
-                    return "Укажите имя для нового бота, например my_new_bot"
+                    return "Укажите имя для нового бота, например bot_my_new"
                 current_data['bot_name'] = command
                 await ChatState.set_state(user_id, self.state.awaited_bot_token)
                 await ChatState.set_data(user_id, current_data)
@@ -106,7 +106,7 @@ class GeneralBot(Bot):
                 new_bot_name = current_data.get("bot_name")
                 if not new_bot_name or new_bot_name == "":
                     await ChatState.set_state(user_id, self.state.awaited_bot_name)
-                    return "Укажите имя для нового бота, например my_new_bot"
+                    return "Укажите имя для нового бота, например bot_my_new"
 
                 await ChatState.set_state(user_id, self.state.install_bot)
                 await ChatState.set_data(user_id, current_data)
@@ -318,7 +318,7 @@ class GeneralBot(Bot):
 
     async def handle_new_bot_request(self, command_args: list = None, user_id=None, room_token: str = None):
         await ChatState.set_state(user_id, self.state.awaited_bot_name)
-        return "Укажите имя для нового бота, например my_new_bot (через ! - !my_new_bot)"
+        return "Укажите имя для нового бота, например bot_my_new (через ! - !bot_my_new)"
 
     async def handle_rm_bot_request(self, command_args: list = None, user_id=None, room_token: str = None):
         await ChatState.set_state(user_id, self.state.awaited_bot_id)

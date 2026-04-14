@@ -45,10 +45,7 @@ class ScriptsBot(Bot):
 
         message_text = message_text.strip()
         if message_text == "{file}":
-            if user_id not in [
-                        "3A5D0454-58BC-4A83-9744-BE34B4292471",  # Кульнев ПВ
-                        "pvmezencev",
-                    ]:
+            if user_id not in config.ADMINS:
                 return {
                     "message": f"Доступ запрещён",
                     "replyTo": message_id,

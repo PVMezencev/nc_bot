@@ -209,11 +209,25 @@ class GeneralBot(Bot):
         except UnicodeDecodeError:
             raise Exception("неизвестная ошибка")
 
-        data_str = data_str.replace('+----+-------------+--------------+-------------+-------+-------------------+\n',
-                                    '')
-        data_str = data_str.replace('+----+-------------+--------------+-------------+-------+-------------------+', '')
+        # +----+-------------------------+-------------------------+-------------+-------+-------------------+
+        # | id | name                    | description             | error_count | state | features          |
+        # +----+-------------------------+-------------------------+-------------+-------+-------------------+
+        # | 6  | bot_general             | bot_general             | 0           | 1     | webhook, response |
+        # | 7  | bot_email               | bot_email               | 0           | 1     | webhook, response |
+        # | 8  | bot_calendar            | bot_calendar            | 0           | 1     | webhook, response |
+        # | 9  | bot_uchipro_notificator | bot_uchipro_notificator | 0           | 1     | webhook, response |
+        # +----+-------------------------+-------------------------+-------------+-------+-------------------+
 
-        csv_file = io.StringIO(data_str)
+        # Избавляемся от строк, кторые содержат "+"
+        clear_str = ''
+        for s in data_str.strip().split('\n'):
+            if s.startswith('+'):
+                continue
+            clear_str += s + '\n'
+
+
+        # Собираем, якобы, CSV - для преобразования в словарь.
+        csv_file = io.StringIO(clear_str)
         reader = csv.DictReader(csv_file, delimiter='|')
 
         bots = []

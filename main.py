@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request, HTTPException, Header
 from bots.general import GeneralBot, BOT_NAME_GENERAL
 from bots.example import ExampleBot, BOT_NAME_EXAMPLE
 from bots.scripts import ScriptsBot, BOT_NAME_SCRIPTS
+from bots.calendar import CalendarBot, BOT_NAME_CALENDAR
 
 # Конфигурация
 import config
@@ -45,6 +46,8 @@ async def handle_webhook(
         bot = ExampleBot(config.NEXTCLOUD_URL)
     elif bot_name == BOT_NAME_SCRIPTS:
         bot = ScriptsBot(config.NEXTCLOUD_URL)
+    elif bot_name == BOT_NAME_CALENDAR:
+        bot = CalendarBot(config.NEXTCLOUD_URL)
     else:
         raise HTTPException(status_code=404, detail=f"неизвестный бот {bot_name}")
 

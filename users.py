@@ -1,5 +1,6 @@
 import asyncio
 import random
+import re
 
 import aiohttp
 import json
@@ -446,7 +447,7 @@ class NextcloudTalkBot:
         reaction = reaction_map.get(reaction_type, "👍")
 
         reaction_values = list(reaction_map.values())
-        random_idx = random.randint(0, len(reaction_values)-1)
+        random_idx = random.randint(0, len(reaction_values) - 1)
         reaction = reaction_values[random_idx]
 
         headers = {
@@ -531,6 +532,14 @@ class NextcloudTalkBot:
             return {"error": "exception", "details": str(e)}
 
 
+def parse_total_amount(text)-> float | None:
+    # Ищем "Итого" и затем число
+    match = re.search(r'Итого.*?(\d[\d\s]*\d)\s*руб', text)
+    if match:
+        amount = re.sub(r'[\s]', '', match.group(1))
+        return float(amount)
+
+
 async def main():
     from config import pvm_name, pvm_token, room, nextcloud_url
 
@@ -564,10 +573,17 @@ async def main():
                     await asyncio.sleep(random_reaction_sleep)
                     await bot.send_reaction_from_user(f'{message.id}', room)
 
-                # Ваша логика обработки сообщений от ботов
-                if "error" in message.message.lower():
-                    response = f"⚠️ Обнаружена ошибка в сообщении от {message.actor_display_name}"
-                    await bot.send_message(response)
+                total_amount = parse_total_amount(msg_text)
+                if total_amount:
+                    txt = ''
+                    if total_amount > 500:
+                        txt = 'Ну я просто охреневаю от вас, коллеги менеджеры ))'
+                    elif total_amount > 400:
+                        txt = 'Обалдеть!'
+                    elif total_amount > 300:
+                        txt = 'Это офигенно!'
+                    if txt != '':
+                        await bot.send_message(txt, reply_to=message.id)
             else:
                 logger.debug(f"Сообщение от пользователя: {message.message[:50]}")
 
@@ -575,6 +591,7 @@ async def main():
         logger.info("Бот будет получать сообщения от ВСЕХ участников, включая других ботов")
 
         await bot.poll_messages(poll_interval=2, callback=custom_handler)
+
 
 if __name__ == "__main__":
     try:

@@ -264,6 +264,7 @@ class NextcloudTalkBot:
             payload['silent'] = 1
 
         try:
+            logger.info(f"Отправляем сообщение в чат [{self.room_token}]: {json.dumps(payload, indent=2, ensure_ascii=False)}")
             async with self.session.post(
                     f"{self.base_api_url}/chat/{self.room_token}",
                     json=payload
@@ -574,6 +575,7 @@ async def main():
                     await bot.send_reaction_from_user(f'{message.id}', room)
 
                 total_amount = parse_total_amount(msg_text)
+                logger.info(f"🤖 Итоговая сумма [{msg_text}]: {total_amount}")
                 if total_amount:
                     txt = ''
                     if total_amount > 500:
@@ -582,6 +584,8 @@ async def main():
                         txt = 'Обалдеть!'
                     elif total_amount > 300:
                         txt = 'Это офигенно!'
+
+                    logger.info(f"🤖 Итоговая сумма [{txt}]: {total_amount}")
                     if txt != '':
                         await bot.send_message(txt, reply_to=message.id)
             else:

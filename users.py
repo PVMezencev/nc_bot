@@ -578,16 +578,16 @@ async def main():
                 logger.info(f"🤖 Итоговая сумма [{msg_text}]: {total_amount}")
                 if total_amount:
                     txt = ''
-                    if total_amount > 500:
-                        txt = 'Ну я просто охреневаю от вас, коллеги менеджеры ))'
-                    elif total_amount > 400:
-                        txt = 'Обалдеть!'
-                    elif total_amount > 300:
-                        txt = 'Это офигенно!'
+                    if total_amount > 500000:
+                        txt = 'Улёёёёёёт! 💪💪💪'
+                    elif total_amount > 400000:
+                        txt = '😍 Обалдеть!'
+                    elif total_amount > 300000:
+                        txt = 'Это офигенно! 👍'
 
-                    logger.info(f"🤖 Итоговая сумма [{txt}]: {total_amount}")
-                    # if txt != '':
-                    #     await bot.send_message(txt, reply_to=message.id)
+                    logger.info(f"🤖 [{txt}]: {total_amount}")
+                    if txt != '':
+                        await bot.send_message(txt, reply_to=message.id)
             else:
                 logger.debug(f"Сообщение от пользователя: {message.message[:50]}")
 

@@ -586,8 +586,8 @@ async def main():
                         txt = 'Это офигенно!'
 
                     logger.info(f"🤖 Итоговая сумма [{txt}]: {total_amount}")
-                    if txt != '':
-                        await bot.send_message(txt, reply_to=message.id)
+                    # if txt != '':
+                    #     await bot.send_message(txt, reply_to=message.id)
             else:
                 logger.debug(f"Сообщение от пользователя: {message.message[:50]}")
 

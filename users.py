@@ -535,7 +535,7 @@ class NextcloudTalkBot:
 
 def parse_total_amount(text)-> float | None:
     # Ищем "Итого" и затем число
-    match = re.search(r'Итого.*?(\d[\d\s]*\d)\s*руб', text)
+    match = re.search(r'итого.*?(\d[\d\s]*\d)\s*руб', text)
     if match:
         amount = re.sub(r'[\s]', '', match.group(1))
         return float(amount)

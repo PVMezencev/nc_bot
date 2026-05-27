@@ -10,6 +10,10 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from enum import Enum
 
+from config import DEEPSEEK_TOKEN
+from deepseek.deepseek import get_joke_request
+from holidays import holidays_2026, holidays_2027
+
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
@@ -91,6 +95,9 @@ class NextcloudTalkBot:
         self.session: Optional[aiohttp.ClientSession] = None
         self.last_known_message_id: Optional[int] = None
         self.last_common_read_id: Optional[int] = None
+
+        # Кэш - отправлена ли шутка сегодня, чтоб не задолбать всех своими шутками.
+        self.__date_joke = dict()
 
     async def __aenter__(self):
         """Поддержка async context manager"""
@@ -330,7 +337,7 @@ class NextcloudTalkBot:
         except Exception as e:
             logger.error(f"Ошибка при отметке прочитанных: {e}")
 
-    async def poll_messages(self, poll_interval: int = 3, callback=None):
+    async def poll_messages(self, poll_interval: int = 3, callback=None, joke_day_callback=None):
         """
         Постоянный опрос новых сообщений с использованием long polling
 
@@ -345,15 +352,37 @@ class NextcloudTalkBot:
             self.last_known_message_id = max(msg.id for msg in history)
             logger.info(f"Инициализирован с последним ID: {self.last_known_message_id}")
 
-            # Обрабатываем исторические сообщения от ботов
-            # bot_messages = [msg for msg in history if msg.is_from_bot]
-            # if bot_messages:
-            #     logger.info(f"Найдено {len(bot_messages)} сообщений от ботов в истории")
-            #     for msg in bot_messages:
-            #         if callback:
-            #             await callback(msg)
-
         while True:
+            if joke_day_callback:
+                now = datetime.now()
+                now_str = now.strftime("%Y-%m-%d")
+                # Время рабочий день - пора отправить шутку.
+                need_joke = 5 < now.hour < 14
+                if need_joke:
+                    # Если уже пора, проверим
+                    # что не отправляли еще шутку сегодня.
+                    need_joke = now_str not in self.__date_joke
+                if need_joke:
+                    # Если не отправляли, проверим
+                    # что не пятница и не суббота.
+                    need_joke = now.weekday() not in [5,6]
+                if need_joke:
+                    # Если не пятница и не суббота - проверим, не праздничный ли день 2026 года.
+                    need_joke = now_str not in holidays_2026
+                if need_joke:
+                    # Если не пятница и не суббота, и не праздничный ли день 2026 года -
+                    # проверим, не праздничный ли день 2027 года.
+                    need_joke = now_str not in holidays_2027
+                if need_joke:
+                    # Вызываем функцию получения шутки дня!
+                    try:
+                        await joke_day_callback(now)
+                        # Укажем, что шутка отправлена, и за одно сбросим кэш, чтоб память не потекла.
+                        self.__date_joke = {
+                            now_str: True
+                        }
+                    except Exception as e:
+                        logger.error(f"Ошибка при выполнении joke_day_callback(): {e}")
             try:
                 # Используем long polling для ожидания новых сообщений
                 new_messages = await self.wait_for_new_messages(
@@ -591,10 +620,32 @@ async def main():
             else:
                 logger.debug(f"Сообщение от пользователя: {message.message[:50]}")
 
+        async def joke_day(now: datetime):
+            today = now.date()
+            weekday = today.weekday()
+            weekday_title = ''
+            if weekday == 0:
+                weekday_title = 'Понедельник'
+            elif weekday == 1:
+                weekday_title = 'Вторник'
+            elif weekday == 2:
+                weekday_title = 'Среда'
+            elif weekday == 3:
+                weekday_title = 'Четверг'
+            elif weekday == 4:
+                weekday_title = 'Пятница'
+            elif weekday == 5:
+                weekday_title = 'Суббота'
+            elif weekday == 6:
+                weekday_title = 'Воскресенье'
+            joke = get_joke_request(ds_token=DEEPSEEK_TOKEN, date=today, weekday=weekday_title)
+
+            await bot.send_message(joke)
+
         logger.info("🚀 Запуск мониторинга чата...")
         logger.info("Бот будет получать сообщения от ВСЕХ участников, включая других ботов")
 
-        await bot.poll_messages(poll_interval=2, callback=custom_handler)
+        await bot.poll_messages(poll_interval=2, callback=custom_handler, joke_day_callback=joke_day)
 
 
 if __name__ == "__main__":

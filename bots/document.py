@@ -22,9 +22,9 @@ import httpx
 
 from bots.common import Bot
 from nextcloud.nextcloudapi import NextcloudClient
+from utilites import pdf_to_jpg_base64
 
 BOT_NAME_DOCUMENT = "bot_document"
-
 
 # ---------------------------------------------------------------------------
 # JSON-схемы для форматов вывода по типу документа
@@ -78,7 +78,6 @@ TEXT_SCHEMA = {
     },
     "required": ["docType", "fileName", "textContent"]
 }
-
 
 # ---------------------------------------------------------------------------
 # Маппинг MIME → тип обработки
@@ -188,7 +187,7 @@ class LlamaClient:
             "messages": messages,
             "response_format": {"type": "json_object"},
         }
-        resp = await client.post(url, json=payload, timeout=120.0)
+        resp = await client.post(url, json=payload, timeout=360.0)
         resp.raise_for_status()
         data = resp.json()
         return data["choices"][0]["message"]["content"]
@@ -242,17 +241,15 @@ class LlamaClient:
                 }
             else:
                 # PDF — отправляем как base64
-                b64 = base64.b64encode(file_data).decode("ascii")
+                b64 = pdf_to_jpg_base64(file_data)
                 user_msg = {
                     "role": "user",
-                    "content": (
-                        f"Файл: {file_name} (PDF, {len(file_data)} байт)\n"
-                        "PDF-файл передан в base64. "
-                        "Определи количество страниц, извлеки текст с каждой страницы. "
-                        "Если страница является изображением — опиши её словесно. "
-                        "Верни результат строго в формате JSON согласно схеме для типа 'pdf'."
-                        f"\n\nBase64:\n{b64}"
-                    )
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}, },
+                        {"type": "text",
+                         "text": "Во вложении изображение. Верни результат строго в формате JSON согласно схеме для "
+                                 "типа 'pdf'."},
+                    ]
                 }
 
             messages = [
@@ -443,8 +440,8 @@ class DocumentBot(Bot):
                     page_lines.append(f"  **Страница {page_num}**: (изображение, текст отсутствует)")
 
             return (
-                f"📄 *{file_name}* (PDF, {result.get('pageCount', len(pages))} стр.)\n\n"
-                + "\n".join(page_lines)
+                    f"📄 *{file_name}* (PDF, {result.get('pageCount', len(pages))} стр.)\n\n"
+                    + "\n".join(page_lines)
             )
 
         elif doc_type == "image":

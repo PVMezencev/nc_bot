@@ -23,11 +23,14 @@ jiter==0.15.0
 motor==3.7.1
 multidict==6.7.1
 openai==2.38.0
+pdf2image==1.17.0
+pillow==12.2.0
 propcache==0.5.2
 pydantic==2.12.5
 pydantic-settings==2.12.0
 pydantic_core==2.41.5
 pymongo==4.16.0
+PyMuPDF==1.27.2.3
 python-dotenv==1.2.1
 PyYAML==6.0.3
 requests==2.32.5
@@ -42,5 +45,3 @@ uvloop==0.22.1
 watchfiles==1.1.1
 websockets==16.0
 yarl==1.24.2
-PyMuPDF>=1.24.0
-Pillow>=10.0.0

@@ -42,3 +42,5 @@ uvloop==0.22.1
 watchfiles==1.1.1
 websockets==16.0
 yarl==1.24.2
+PyMuPDF>=1.24.0
+Pillow>=10.0.0

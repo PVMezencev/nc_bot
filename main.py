@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException, Header
@@ -6,6 +7,7 @@ from fastapi import FastAPI, Request, HTTPException, Header
 from bots.general import GeneralBot, BOT_NAME_GENERAL
 from bots.example import ExampleBot, BOT_NAME_EXAMPLE
 from bots.scripts import ScriptsBot, BOT_NAME_SCRIPTS
+from bots.document import DocumentBot, BOT_NAME_DOCUMENT
 
 # Конфигурация
 import config
@@ -13,10 +15,38 @@ from repo.mongo import Users
 
 mongo_users_repo = Users(connection=config.MONGODB_CONNECTION)
 
+# Глобальный state-контейнер для DocumentBot (mutable, чтобы избежать global внутри lifespan)
+_state: dict = {}
+
+
+@asynccontextmanager
+async def lifespan(app_instance: FastAPI):
+    """Lifespan-менеджер: старт и graceful shutdown."""
+    # --- startup ---
+    if config.DOCUMENT_CHAT_ROOM:
+        doc_bot = DocumentBot(config.NEXTCLOUD_URL)
+        doc_bot._register_commands()
+        doc_bot.start()
+        _state["document_bot"] = doc_bot
+        print(f"[main] DocumentBot запущен (папка: {config.DOCUMENT_WATCH_DIR}, "
+              f"чат: {config.DOCUMENT_CHAT_ROOM}, интервал: {config.POLL_INTERVAL_SEC}с)")
+    else:
+        print("[main] DocumentBot отключён (DOCUMENT_CHAT_ROOM не задан)")
+
+    yield
+
+    # --- shutdown ---
+    doc_bot = _state.get("document_bot")
+    if doc_bot:
+        doc_bot.stop()
+        print("[main] DocumentBot остановлен")
+
+
 app = FastAPI(
     title="Nextcloud Talk Bot",
     description="Бот для Nextcloud Talk",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 
@@ -45,6 +75,8 @@ async def handle_webhook(
         bot = ExampleBot(config.NEXTCLOUD_URL)
     elif bot_name == BOT_NAME_SCRIPTS:
         bot = ScriptsBot(config.NEXTCLOUD_URL)
+    elif bot_name == BOT_NAME_DOCUMENT:
+        bot = DocumentBot(config.NEXTCLOUD_URL)
     else:
         raise HTTPException(status_code=404, detail=f"неизвестный бот {bot_name}")
 

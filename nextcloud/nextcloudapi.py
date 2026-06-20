@@ -135,6 +135,31 @@ class NextcloudClient:
         else:
             raise Exception(f"Ошибка создания файла: {response.status_code}")
 
+    def download_file_content(self, file_path, encode_path=False):
+        """Скачать файл и вернуть содержимое как bytes (без сохранения на диск)."""
+        if encode_path:
+            file_path = str(urllib.parse.quote(file_path)).lower()
+        file_url = f"{self.webdav_base_url}/{file_path}"
+        try:
+            response = requests.get(file_url, auth=self.auth)
+        except Exception as e:
+            raise Exception(f"Ошибка: {e}")
+        if response.status_code == 200:
+            return response.content
+        else:
+            raise Exception(f"Ошибка скачивания: {response.status_code}")
+
+    def file_exists(self, file_path, encode_path=False):
+        """Проверить существование файла на Nextcloud."""
+        if encode_path:
+            file_path = str(urllib.parse.quote(file_path)).lower()
+        file_url = f"{self.webdav_base_url}/{file_path}"
+        try:
+            response = requests.head(file_url, auth=self.auth)
+            return response.status_code == 200
+        except Exception:
+            return False
+
     def parse_webdav_response(self, xml_response):
         """Парсит XML-ответ WebDAV и возвращает списки каталогов и файлов."""
         namespaces = {

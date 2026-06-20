@@ -25,7 +25,7 @@ def unzip_archive(zip_file_path, to_dir):
 
 def pdf_to_jpg_base64(pdf_bytes):
     # Конвертируем PDF страницы в список PIL Image
-    images = convert_from_bytes(pdf_bytes)
+    images = convert_from_bytes(pdf_bytes, poppler_path='/usr/bin')
     # Вычисляем размеры для итогового изображения
     total_height = sum(img.height for img in images)
     max_width = max(img.width for img in images)

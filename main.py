@@ -25,7 +25,6 @@ async def lifespan(app_instance: FastAPI):
     # --- startup ---
     if config.DOCUMENT_CHAT_ROOM:
         doc_bot = DocumentBot(config.NEXTCLOUD_URL)
-        doc_bot._register_commands()
         doc_bot.start()
         _state["document_bot"] = doc_bot
         print(f"[main] DocumentBot запущен (папка: {config.DOCUMENT_WATCH_DIR}, "

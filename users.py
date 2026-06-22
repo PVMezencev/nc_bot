@@ -96,6 +96,9 @@ class NextcloudTalkBot:
         self.last_known_message_id: Optional[int] = None
         self.last_common_read_id: Optional[int] = None
 
+        # Временная метка старта — чтобы не реагировать на старые сообщения при перезапуске
+        self._start_time: Optional[datetime] = None
+
         # Кэш - отправлена ли шутка сегодня, чтоб не задолбать всех своими шутками.
         self.__date_joke = dict()
 
@@ -346,11 +349,15 @@ class NextcloudTalkBot:
         """
         logger.info(f"Начинаем мониторинг чата {self.room_token}...")
 
-        # # Получаем последние сообщения для инициализации
+        # Получаем последние сообщения для инициализации
         history = await self.get_history(limit=3)
         if history:
             self.last_known_message_id = max(msg.id for msg in history)
             logger.info(f"Инициализирован с последним ID: {self.last_known_message_id}")
+
+        # Запоминаем время старта — не реагируем на сообщения, пришедшие до запуска бота
+        self._start_time = datetime.now()
+        logger.info(f"Время старта: {self._start_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
         while True:
             if joke_day_callback:
@@ -393,13 +400,28 @@ class NextcloudTalkBot:
                 if new_messages:
                     logger.info(f"Получено {len(new_messages)} новых сообщений")
 
+                    # Фильтрация: не реагировать на старые сообщения при перезапуске
+                    # Обновляем last_known_message_id для всех сообщений, но обрабатываем
+                    # через callback только те, что пришли после старта бота
+                    processed_count = 0
                     for message in new_messages:
-                        if callback:
-                            await callback(message)
+                        msg_time = message.datetime
+                        if msg_time < self._start_time:
+                            logger.debug(
+                                f"⏭️ Пропущено старое сообщение (от {msg_time.strftime('%Y-%m-%d %H:%M:%S')}): "
+                                f"{message.message[:60]}..."
+                            )
                         else:
-                            await self.default_message_handler(message)
+                            if callback:
+                                await callback(message)
+                            else:
+                                await self.default_message_handler(message)
+                            processed_count += 1
 
-                    # Отмечаем сообщения как прочитанные
+                    if processed_count > 0:
+                        logger.info(f"Обработано {processed_count} новых сообщений (пришло {len(new_messages)})")
+
+                    # Отмечаем сообщения как прочитанные (все, включая старые)
                     if new_messages:
                         await self.mark_messages_as_read(new_messages[-1].id)
 

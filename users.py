@@ -625,20 +625,20 @@ async def main():
                     await asyncio.sleep(random_reaction_sleep)
                     await bot.send_reaction_from_user(f'{message.id}', room)
 
-                total_amount = parse_total_amount(msg_text)
-                logger.info(f"🤖 Итоговая сумма [{msg_text}]: {total_amount}")
-                if total_amount:
-                    txt = ''
-                    if total_amount > 500000:
-                        txt = 'Улёёёёёёт! 💪💪💪'
-                    elif total_amount > 400000:
-                        txt = '😍 Обалдеть!'
-                    elif total_amount > 300000:
-                        txt = 'Это офигенно! 👍'
-
-                    logger.info(f"🤖 [{txt}]: {total_amount}")
-                    if txt != '':
-                        await bot.send_message(txt, reply_to=message.id)
+                # total_amount = parse_total_amount(msg_text)
+                # logger.info(f"🤖 Итоговая сумма [{msg_text}]: {total_amount}")
+                # if total_amount:
+                #     txt = ''
+                #     if total_amount > 500000:
+                #         txt = 'Улёёёёёёт! 💪💪💪'
+                #     elif total_amount > 400000:
+                #         txt = '😍 Обалдеть!'
+                #     elif total_amount > 300000:
+                #         txt = 'Это офигенно! 👍'
+                #
+                #     logger.info(f"🤖 [{txt}]: {total_amount}")
+                #     if txt != '':
+                #         await bot.send_message(txt, reply_to=message.id)
             else:
                 logger.debug(f"Сообщение от пользователя: {message.message[:50]}")
 
@@ -667,7 +667,7 @@ async def main():
         logger.info("🚀 Запуск мониторинга чата...")
         logger.info("Бот будет получать сообщения от ВСЕХ участников, включая других ботов")
 
-        await bot.poll_messages(poll_interval=2, callback=custom_handler, joke_day_callback=joke_day)
+        await bot.poll_messages(poll_interval=2, callback=custom_handler, joke_day_callback=None)
 
 
 if __name__ == "__main__":

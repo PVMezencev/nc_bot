@@ -160,6 +160,46 @@ class NextcloudClient:
         except Exception:
             return False
 
+    def get_file_id(self, file_path, encode_path=False):
+        """Получить численный file id через WebDAV PROPFIND (nc:fileid)."""
+        if encode_path:
+            file_path = str(urllib.parse.quote(file_path)).lower()
+        file_url = f"{self.webdav_base_url}/{file_path}"
+        headers = {
+            "Depth": "0",
+            "OC-Chunked": "false",
+        }
+        propfind_body = '''<?xml version="1.0"?>
+<d:propfind xmlns:d="DAV:" xmlns:nc="http://nextcloud.org/ns">
+  <d:prop>
+    <nc:fileid/>
+  </d:prop>
+</d:propfind>'''
+        try:
+            response = requests.request(
+                "PROPFIND", file_url, headers=headers, auth=self.auth,
+                data=propfind_body, timeout=15,
+            )
+        except Exception as e:
+            raise Exception(f"Ошибка получения file id: {e}")
+        if response.status_code not in (200, 207):
+            raise Exception(f"Ошибка получения file id: {response.status_code}")
+
+        namespaces = {
+            'd': 'DAV:',
+            'nc': 'http://nextcloud.org/ns',
+        }
+        root = ET.fromstring(response.text)
+        for resp_elem in root.findall('d:response', namespaces):
+            propstat = resp_elem.find('d:propstat', namespaces)
+            if propstat is None:
+                continue
+            prop = propstat.find('d:prop', namespaces)
+            fileid_elem = prop.find('nc:fileid', namespaces)
+            if fileid_elem is not None and fileid_elem.text:
+                return int(fileid_elem.text)
+        raise Exception("fileid не найден в ответе")
+
     def parse_webdav_response(self, xml_response):
         """Парсит XML-ответ WebDAV и возвращает списки каталогов и файлов."""
         namespaces = {

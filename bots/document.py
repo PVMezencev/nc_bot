@@ -960,6 +960,10 @@ class DocumentBot(Bot):
             if href in self._processed:
                 continue
 
+            # Пропускаем файлы-результаты в подпапке result/
+            if "/result/" in rel_path:
+                continue
+
             # Проверка типа источника
             source_type = _detect_source_type(file_name)
             if source_type == "unknown":
@@ -1107,12 +1111,17 @@ class DocumentBot(Bot):
                 print(f"[DocumentBot] Ошибка прикрепления файла: {e}")
 
     async def _share_file_in_chat(self, room_token: str, file_path: str) -> None:
-        """Отправить файл в чат через /chat/{token}/share (objectType=Files)."""
+        """Отправить файл в чат через /chat/{token}/share (objectType=Files).
+
+        objectId — численный file id, полученный через WebDAV PROPFIND.
+        """
+        file_id = self.nc_client.get_file_id(file_path, encode_path=True)
+
         url = f"{self.nc_url}/ocs/v2.php/apps/spreed/api/v1/chat/{room_token}/share"
 
         payload = {
             "objectType": "Files",
-            "objectId": file_path,
+            "objectId": str(file_id),
         }
 
         async with httpx.AsyncClient() as client:
@@ -1129,7 +1138,7 @@ class DocumentBot(Bot):
             if resp.status_code not in (200, 201):
                 print(f"[DocumentBot] share failed: {resp.status_code} {resp.text[:300]}")
             else:
-                print(f"[DocumentBot] Файл прикреплён: {file_path}")
+                print(f"[DocumentBot] Файл прикреплён (id={file_id}): {file_path}")
 
     # -----------------------------------------------------------------------
     # Команды бота (для управления через чат)

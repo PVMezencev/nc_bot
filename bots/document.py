@@ -1111,34 +1111,13 @@ class DocumentBot(Bot):
                 print(f"[DocumentBot] Ошибка прикрепления файла: {e}")
 
     async def _share_file_in_chat(self, room_token: str, file_path: str) -> None:
-        """Отправить файл в чат через /chat/{token}/share (objectType=Files).
 
-        objectId — численный file id, полученный через WebDAV PROPFIND.
-        """
-        file_id = self.nc_client.get_file_id(file_path, encode_path=True)
+        try:
+            self.nc_client.upload_file_to_chat(room_token, file_path, message="Дамп")
+        except Exception as e:
+            print(f"[DocumentBot] Ошибка прикрепления файла: {e}")
 
-        url = f"{self.nc_url}/ocs/v2.php/apps/spreed/api/v1/chat/{room_token}/share"
 
-        payload = {
-            "objectType": "Files",
-            "objectId": str(file_id),
-        }
-
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                url,
-                json=payload,
-                headers={
-                    "OCS-APIRequest": "true",
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                },
-                timeout=30.0,
-            )
-            if resp.status_code not in (200, 201):
-                print(f"[DocumentBot] share failed: {resp.status_code} {resp.text[:300]}")
-            else:
-                print(f"[DocumentBot] Файл прикреплён (id={file_id}): {file_path}")
 
     # -----------------------------------------------------------------------
     # Команды бота (для управления через чат)

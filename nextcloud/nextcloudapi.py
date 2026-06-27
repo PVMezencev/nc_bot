@@ -109,6 +109,44 @@ class NextcloudClient:
         if response.status_code != 201 and response.status_code != 204:
             raise Exception(f"Ошибка загрузки: {response.status_code}")
 
+    def upload_file_to_chat(self, token, file_path, message=""):
+        """
+        Отправить файл в чат
+        token: токен комнаты
+        file_path: путь к файлу на локальной машине
+        message: текст сообщения (опционально)
+        """
+        # Используем другой эндпоинт для загрузки файлов
+        url = f"{self.nextcloud_url}/ocs/v2.php/apps/spreed/api/v1/room/{token}/share"
+
+        # Загружаем файл
+        with open(file_path, 'rb') as f:
+            files = {
+                'file': (os.path.basename(file_path), f, 'application/octet-stream')
+            }
+            data = {
+                'message': message
+            }
+
+            # Для загрузки файлов используем multipart/form-data
+            headers = {
+                'OCS-APIRequest': 'true',
+                'Accept': 'application/json',
+            }
+
+            response = requests.post(
+                url,
+                auth=self.auth,
+                headers=headers,
+                files=files,
+                data=data
+            )
+
+            if response.status_code == 200:
+                return response.json()
+            else:
+                raise Exception(f"Ошибка загрузки файла: {response.status_code}, {response.text}")
+
     def create_directory_recursive(self, directory_path):
         """7. Создать каталоги рекурсивно."""
         parts = directory_path.split("/")

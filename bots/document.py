@@ -1112,18 +1112,57 @@ class DocumentBot(Bot):
 
     async def _share_file_in_chat(self, room_token: str, file_path: str,
                                   caption: str = "") -> None:
-        """Отправить файл в чат через files_sharing API (shareType=10)."""
-        import secrets
-        reference_id = secrets.token_hex(32)
+        """
+        Отправить файл в чат через files_sharing API (shareType=10).
 
-        self.nc_client.share_file_to_chat(
-            room_token=room_token,
-            file_path=file_path,
-            caption=caption,
-            reference_id=reference_id,
-            silent=True,
-        )
-        print(f"[DocumentBot] Файл прикреплён: {file_path}")
+        Использует POST /ocs/v2.php/apps/files_sharing/api/v1/shares
+        с shareType=10 (Talk conversation).
+        """
+        try:
+            import secrets
+            reference_id = secrets.token_hex(32)
+
+            self.nc_client.share_file_to_chat(
+                room_token=room_token,
+                file_path=file_path,
+                caption=caption,
+                reference_id=reference_id,
+                silent=True,
+            )
+            print(f"[DocumentBot] Файл прикреплён: {file_path}")
+        except Exception as e:
+            # Fallback — попытаться через get_file_id + chat/share
+            print(f"[DocumentBot] files_sharing fallback: {e}")
+            try:
+                file_id = self.nc_client.get_file_id(file_path, encode_path=True)
+                await self._share_file_by_id(room_token, file_id)
+            except Exception as e2:
+                raise Exception(f"Fallback тоже не сработал: {e2}") from e
+
+    async def _share_file_by_id(self, room_token: str, file_id: int) -> None:
+        """Fallback — прикрепить файл через chat/{token}/share (objectType=Files, objectId=file_id)."""
+        url = f"{self.nc_url}/ocs/v2.php/apps/spreed/api/v1/chat/{room_token}/share"
+
+        payload = {
+            "objectType": "Files",
+            "objectId": str(file_id),
+        }
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                url,
+                json=payload,
+                headers={
+                    "OCS-APIRequest": "true",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                timeout=30.0,
+            )
+            if resp.status_code not in (200, 201):
+                print(f"[DocumentBot] chat/share fallback failed: {resp.status_code} {resp.text[:300]}")
+            else:
+                print(f"[DocumentBot] Файл прикреплён (id={file_id}) через fallback")
 
 
 

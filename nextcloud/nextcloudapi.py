@@ -133,8 +133,9 @@ class NextcloudClient:
             "silent": silent,
         })
 
+        # API expects application/x-www-form-urlencoded (not JSON)
         data = {
-            "shareType": 10,
+            "shareType": "10",
             "shareWith": room_token,
             "path": f"/{file_path}" if not file_path.startswith("/") else file_path,
             "talkMetaData": talk_meta,
@@ -145,14 +146,13 @@ class NextcloudClient:
         headers = {
             "OCS-APIRequest": "true",
             "Accept": "application/json",
-            "Content-Type": "application/json",
         }
 
         response = requests.post(
             url,
             auth=self.auth,
             headers=headers,
-            json=data,
+            data=data,
             timeout=30,
         )
 

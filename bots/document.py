@@ -1007,7 +1007,9 @@ class DocumentBot(Bot):
         # Сформировать сообщение для чата
         doc_type = result.get("docType", DOCUMENT_TYPE_UNKNOWN)
         chat_msg = self._format_result(file_name, doc_type, result)
-        await self._notify(chat_msg)
+
+        # Сохранить JSON-структуру результата и отправить вложением
+        await self._send_result_with_attachment(file_name, result, chat_msg)
 
     @staticmethod
     def _format_result(file_name: str, doc_type: str, result: dict) -> str:
@@ -1045,6 +1047,89 @@ class DocumentBot(Bot):
             await self.send_to_nextcloud(self.chat_room, message, silent=True)
         except Exception as e:
             print(f"[DocumentBot] Ошибка отправки в чат: {e}")
+
+    async def _upload_json_to_nextcloud(self, file_name: str, data: dict) -> str | None:
+        """
+        Сериализовать JSON-структуру результата и загрузить файл
+        на Nextcloud через WebDAV (create_file). Вернуть путь к файлу.
+        """
+        # Безопасное имя без расширений → .json
+        base = os.path.splitext(os.path.basename(urllib.parse.unquote(file_name)))[0]
+        safe_base = "".join(c if c.isalnum() or c in " -_" else "_" for c in base)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        json_file_name = f"{safe_base}_{timestamp}.json"
+
+        # Путь в Nextcloud рядом с watched-папкой
+        remote_dir = config.DOCUMENT_WATCH_DIR.rstrip("/") + "/result"
+
+        try:
+            # Сериализация в JSON (utf-8, ensure_ascii=False)
+            json_content = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+
+            # Убедиться, что удалённая директория существует
+            self.nc_client.create_directory_recursive(remote_dir)
+
+            # Создание файла на Nextcloud с заданным именем
+            self.nc_client.create_file(remote_dir, json_file_name, json_content)
+            print(f"[DocumentBot] JSON загружен: {remote_dir}/{json_file_name}")
+            return f"{remote_dir}/{json_file_name}"
+        except Exception as e:
+            print(f"[DocumentBot] Ошибка загрузки JSON: {e}")
+            return None
+
+    async def _send_result_with_attachment(self, file_name: str,
+                                           result: dict,
+                                           chat_msg: str) -> None:
+        """
+        Отправить текстовое описание результата + JSON-файл вложением в чат.
+        1. Загрузить JSON на Nextcloud.
+        2. Отправить текстовое сообщение.
+        3. Прикрепить файл к чату через share-API.
+        """
+        if not self.chat_room:
+            print(f"[DocumentBot] (нет chat_room) {chat_msg}")
+            return
+
+        # Шаг 1 — загрузить JSON
+        remote_path = await self._upload_json_to_nextcloud(file_name, result)
+
+        # Шаг 2 — отправить текстовое сообщение
+        try:
+            await self.send_to_nextcloud(self.chat_room, chat_msg, silent=True)
+        except Exception as e:
+            print(f"[DocumentBot] Ошибка отправки сообщения: {e}")
+
+        # Шаг 3 — прикрепить файл через chat/share
+        if remote_path:
+            try:
+                await self._share_file_in_chat(self.chat_room, remote_path)
+            except Exception as e:
+                print(f"[DocumentBot] Ошибка прикрепления файла: {e}")
+
+    async def _share_file_in_chat(self, room_token: str, file_path: str) -> None:
+        """Отправить файл в чат через /chat/{token}/share (objectType=Files)."""
+        url = f"{self.nc_url}/ocs/v2.php/apps/spreed/api/v1/chat/{room_token}/share"
+
+        payload = {
+            "objectType": "Files",
+            "objectId": file_path,
+        }
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                url,
+                json=payload,
+                headers={
+                    "OCS-APIRequest": "true",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                timeout=30.0,
+            )
+            if resp.status_code not in (200, 201):
+                print(f"[DocumentBot] share failed: {resp.status_code} {resp.text[:300]}")
+            else:
+                print(f"[DocumentBot] Файл прикреплён: {file_path}")
 
     # -----------------------------------------------------------------------
     # Команды бота (для управления через чат)

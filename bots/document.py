@@ -1103,19 +1103,27 @@ class DocumentBot(Bot):
         except Exception as e:
             print(f"[DocumentBot] Ошибка отправки сообщения: {e}")
 
-        # Шаг 3 — прикрепить файл через chat/share
+        # Шаг 3 — прикрепить файл в чат
         if remote_path:
             try:
-                await self._share_file_in_chat(self.chat_room, remote_path)
+                await self._share_file_in_chat(self.chat_room, remote_path, caption=chat_msg)
             except Exception as e:
                 print(f"[DocumentBot] Ошибка прикрепления файла: {e}")
 
-    async def _share_file_in_chat(self, room_token: str, file_path: str) -> None:
+    async def _share_file_in_chat(self, room_token: str, file_path: str,
+                                  caption: str = "") -> None:
+        """Отправить файл в чат через files_sharing API (shareType=10)."""
+        import secrets
+        reference_id = secrets.token_hex(32)
 
-        try:
-            self.nc_client.upload_file_to_chat(room_token, file_path, message="Дамп")
-        except Exception as e:
-            print(f"[DocumentBot] Ошибка прикрепления файла: {e}")
+        self.nc_client.share_file_to_chat(
+            room_token=room_token,
+            file_path=file_path,
+            caption=caption,
+            reference_id=reference_id,
+            silent=True,
+        )
+        print(f"[DocumentBot] Файл прикреплён: {file_path}")
 
 
 

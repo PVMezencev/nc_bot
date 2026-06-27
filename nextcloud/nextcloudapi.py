@@ -1,10 +1,11 @@
+import json
+import os
 import urllib.parse
+import xml.etree.ElementTree as ET
 from datetime import datetime
 
 import requests
 from requests.auth import HTTPBasicAuth
-import os
-import xml.etree.ElementTree as ET
 
 
 class NextcloudClient:
@@ -109,17 +110,68 @@ class NextcloudClient:
         if response.status_code != 201 and response.status_code != 204:
             raise Exception(f"Ошибка загрузки: {response.status_code}")
 
+    def share_file_to_chat(self, room_token: str, file_path: str,
+                           caption: str = "", reference_id: str = None,
+                           silent: bool = False) -> dict:
+        """
+        Поделиться файлом, уже загруженным на Nextcloud, в чат Talk.
+
+        Использует endpoint files_sharing/api/v1/shares (shareType=10).
+
+        Args:
+            room_token: токен комнаты Talk
+            file_path: путь к файлу относительно корня пользователя (например "tmp/result/file.json")
+            caption: текстовое описание, которое покажется вместе с файлом
+            reference_id: уникальный reference для сообщения
+            silent: не создавать уведомление
+        """
+        url = f"{self.nextcloud_url}/ocs/v2.php/apps/files_sharing/api/v1/shares"
+
+        # talkMetaData — JSON-строка
+        talk_meta = json.dumps({
+            "caption": caption,
+            "silent": silent,
+        })
+
+        data = {
+            "shareType": 10,
+            "shareWith": room_token,
+            "path": f"/{file_path}" if not file_path.startswith("/") else file_path,
+            "talkMetaData": talk_meta,
+        }
+        if reference_id:
+            data["referenceId"] = reference_id
+
+        headers = {
+            "OCS-APIRequest": "true",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+
+        response = requests.post(
+            url,
+            auth=self.auth,
+            headers=headers,
+            json=data,
+            timeout=30,
+        )
+
+        if response.status_code in (200, 201, 207):
+            return response.json()
+        else:
+            raise Exception(
+                f"Ошибка шаринга файла в чат: {response.status_code}, {response.text}"
+            )
+
     def upload_file_to_chat(self, token, file_path, message=""):
         """
-        Отправить файл в чат
+        Отправить файл в чат (legacy — multipart/form-data).
         token: токен комнаты
         file_path: путь к файлу на локальной машине
         message: текст сообщения (опционально)
         """
-        # Используем другой эндпоинт для загрузки файлов
         url = f"{self.nextcloud_url}/ocs/v2.php/apps/spreed/api/v1/room/{token}/share"
 
-        # Загружаем файл
         with open(file_path, 'rb') as f:
             files = {
                 'file': (os.path.basename(file_path), f, 'application/octet-stream')
@@ -128,7 +180,6 @@ class NextcloudClient:
                 'message': message
             }
 
-            # Для загрузки файлов используем multipart/form-data
             headers = {
                 'OCS-APIRequest': 'true',
                 'Accept': 'application/json',

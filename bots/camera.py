@@ -4,6 +4,7 @@ CameraBot — захват кадров с IP-камер по RTSP через ff
 """
 
 import asyncio
+import shutil
 from datetime import datetime
 
 import config
@@ -63,10 +64,12 @@ def capture_rtsp_frame(rtsp_url: str, timeout: int = 10) -> bytes:
     Raises:
         Exception: если ffmpeg не смог захватить кадр
     """
+
+    ffmpeg_path = shutil.which("ffmpeg")
     proc = asyncio.run(
         asyncio.wait_for(
             asyncio.create_subprocess_exec(
-                "ffmpeg",
+                ffmpeg_path,
                 "-y",  # перезаписать без вопросов
                 "-timeout", str(timeout * 1000000),  # микросекунды
                 "-i", rtsp_url,

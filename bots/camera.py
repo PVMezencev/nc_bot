@@ -47,68 +47,47 @@ def build_rtsp_url(channel: str) -> str:
     return f"{config.RTSP_BASE}/{channel}"
 
 
+import subprocess
+
+
 def capture_rtsp_frame(rtsp_url: str, timeout: int = 10) -> bytes:
     """
     Захватить один кадр с RTSP-потока через ffmpeg.
-
-    Результат возвращается как JPEG-байты (io.BytesIO → bytes),
-    файл на диск не сохраняется.
-
-    Args:
-        rtsp_url: полный RTSP-URL камеры
-        timeout: таймаут в секундах
-
-    Returns:
-        JPEG-байты кадра
-
-    Raises:
-        Exception: если ffmpeg не смог захватить кадр
     """
+    ffmpeg_path = '/usr/bin/ffmpeg'  # или shutil.which("ffmpeg")
+
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-timeout", str(timeout * 1000000),
+        "-rtsp_transport", "tcp",
+        "-i", rtsp_url,
+        "-vframes", "1",
+        "-q:v", "3",
+        "-f", "image2",
+        "-loglevel", "error",
+        "-",
+    ]
 
     try:
-        ffmpeg_path = '/usr/bin/ffmpeg'
-        proc = asyncio.run(
-            asyncio.wait_for(
-                asyncio.create_subprocess_exec(
-                    ffmpeg_path,
-                    "-y",  # перезаписать без вопросов
-                    "-timeout", str(timeout * 1000000),  # микросекунды
-                    "-i", rtsp_url,
-                    "-vframes", "1",  # один кадр
-                    "-q:v", "3",  # хорошее качество JPEG (1-31, меньше = лучше)
-                    "-f", "image2",
-                    "-loglevel", "error",  # скрыть info/warn
-                    "-",  # вывод в stdout
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                ),
-                timeout=timeout,
-            )
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False
         )
 
-        # ПРАВИЛЬНО: используем asyncio.run для ожидания корутины
-        stdout, stderr = asyncio.run(
-            asyncio.wait_for(
-                proc.communicate(),
-                timeout=timeout
-            )
-        )
+        if result.returncode != 0 or not result.stdout:
+            error_msg = result.stderr.decode("utf-8", errors="replace").strip()
+            raise Exception(f"ffmpeg ошибка: {error_msg}")
 
-        if proc.returncode != 0 or not stdout:
-            err = stderr.decode("utf-8", errors="replace").strip() if stderr else "unknown error"
-            raise Exception(f"ffmpeg ошибка (rc={proc.returncode}): {err}")
+        return result.stdout
 
-        return stdout
-
-    except asyncio.TimeoutError:
-        # Принудительно завершаем процесс при таймауте
-        try:
-            proc.kill()
-        except:
-            pass
+    except subprocess.TimeoutExpired:
         raise Exception(f"Таймаут захвата кадра ({timeout} сек)")
-    except Exception as e:
-        raise Exception(f"Ошибка захвата кадра: {e}")
+    except FileNotFoundError:
+        raise Exception(f"ffmpeg не найден по пути: {ffmpeg_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -186,12 +165,7 @@ class CameraBot(Bot):
         rtsp_url = build_rtsp_url(camera["channel"])
 
         try:
-            jpeg_data = await asyncio.wait_for(
-                asyncio.to_thread(capture_rtsp_frame, rtsp_url),
-                timeout=15,
-            )
-        except asyncio.TimeoutError:
-            return f"⏰ Таймаут при захвате кадра с камеры {emoji} {label}"
+            jpeg_data = capture_rtsp_frame(rtsp_url)
         except Exception as e:
             return f"❌ Ошибка захвата ({emoji} {label}): {e}"
 
@@ -211,17 +185,12 @@ class CameraBot(Bot):
             rtsp_url = build_rtsp_url(camera["channel"])
 
             try:
-                jpeg_data = await asyncio.wait_for(
-                    asyncio.to_thread(capture_rtsp_frame, rtsp_url),
-                    timeout=15,
-                )
+                jpeg_data = capture_rtsp_frame(rtsp_url)
                 try:
                     await self._send_image_to_chat(room_token, jpeg_data, f"{emoji} {label} — {datetime.now().strftime('%H:%M:%S')}")
                     results.append(f"✅ {emoji} {label}")
                 except Exception as e:
                     results.append(f"❌ {emoji} {label} (отправка: {e})")
-            except asyncio.TimeoutError:
-                results.append(f"⏰ {emoji} {label} (таймаут)")
             except Exception as e:
                 results.append(f"❌ {emoji} {label} ({e})")
 

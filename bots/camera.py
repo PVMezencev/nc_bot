@@ -155,6 +155,7 @@ class CameraBot(Bot):
         self, camera_key: str,
         command_args: list = None, user_id=None, room_token: str = None,
     ) -> str:
+
         """Захватить кадр с указанной камеры и отправить в чат."""
         camera = CAMERAS.get(camera_key)
         if not camera:
@@ -209,7 +210,7 @@ class CameraBot(Bot):
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"camera_{timestamp}.jpg"
-        upload_dir = "tmp/camera_screenshots"
+        upload_dir = "camera_screenshots"
 
         nc_client = NextcloudClient(
             config.NEXTCLOUD_URL,
@@ -242,6 +243,6 @@ class CameraBot(Bot):
             room_token=room_token,
             file_path=remote_path,
             caption=caption,
-            reference_id=reference_id,
+            # reference_id=reference_id,
             silent=False,
         )

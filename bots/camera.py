@@ -65,34 +65,50 @@ def capture_rtsp_frame(rtsp_url: str, timeout: int = 10) -> bytes:
         Exception: если ffmpeg не смог захватить кадр
     """
 
-    ffmpeg_path = shutil.which("ffmpeg")
-    proc = asyncio.run(
-        asyncio.wait_for(
-            asyncio.create_subprocess_exec(
-                ffmpeg_path,
-                "-y",  # перезаписать без вопросов
-                "-timeout", str(timeout * 1000000),  # микросекунды
-                "-i", rtsp_url,
-                "-vframes", "1",  # один кадр
-                "-q:v", "3",  # хорошее качество JPEG (1-31, меньше = лучше)
-                "-f", "image2",
-                "-loglevel", "error",  # скрыть info/warn
-                "-",  # вывод в stdout
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            ),
-            timeout=timeout,
+    try:
+        ffmpeg_path = '/usr/bin/ffmpeg'
+        proc = asyncio.run(
+            asyncio.wait_for(
+                asyncio.create_subprocess_exec(
+                    ffmpeg_path,
+                    "-y",  # перезаписать без вопросов
+                    "-timeout", str(timeout * 1000000),  # микросекунды
+                    "-i", rtsp_url,
+                    "-vframes", "1",  # один кадр
+                    "-q:v", "3",  # хорошее качество JPEG (1-31, меньше = лучше)
+                    "-f", "image2",
+                    "-loglevel", "error",  # скрыть info/warn
+                    "-",  # вывод в stdout
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                ),
+                timeout=timeout,
+            )
         )
-    )
 
-    # Дождаться завершения и проверить
-    stdout, stderr = proc.communicate()
+        # ПРАВИЛЬНО: используем asyncio.run для ожидания корутины
+        stdout, stderr = asyncio.run(
+            asyncio.wait_for(
+                proc.communicate(),
+                timeout=timeout
+            )
+        )
 
-    if proc.returncode != 0 or not stdout:
-        err = stderr.decode("utf-8", errors="replace").strip() if stderr else "unknown error"
-        raise Exception(f"ffmpeg ошибка (rc={proc.returncode}): {err}")
+        if proc.returncode != 0 or not stdout:
+            err = stderr.decode("utf-8", errors="replace").strip() if stderr else "unknown error"
+            raise Exception(f"ffmpeg ошибка (rc={proc.returncode}): {err}")
 
-    return stdout
+        return stdout
+
+    except asyncio.TimeoutError:
+        # Принудительно завершаем процесс при таймауте
+        try:
+            proc.kill()
+        except:
+            pass
+        raise Exception(f"Таймаут захвата кадра ({timeout} сек)")
+    except Exception as e:
+        raise Exception(f"Ошибка захвата кадра: {e}")
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 .idea/
 __pycache__/
 scripts_for_bot/
+data/
 
 .env
 config*.py

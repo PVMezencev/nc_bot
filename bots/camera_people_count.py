@@ -21,10 +21,12 @@ import re
 import sys
 from datetime import datetime
 
-from PIL import Image
+from PIL import Image, ImageDraw
 import httpx
 import requests
 from requests.auth import HTTPBasicAuth
+
+from ultralytics import YOLO
 
 from config import RTSP_BASE, NEXTCLOUD_URL, NEXTCLOUD_API_USER, NEXTCLOUD_API_PASSWORD
 from bots.camera import CAMERAS, build_rtsp_url, capture_rtsp_frame
@@ -105,6 +107,48 @@ async def _capture_one(key, rtsp_url, camera):
 # ---------------------------------------------------------------------------
 
 async def count_people_single_camera(frame):
+    """Посчитать людей на одном кадре."""
+    label = frame.get("label", "")
+    emoji = frame.get("emoji", "")
+
+    b64 = jpeg_to_base64(frame["jpeg"])
+
+    system_prompt = (
+        "Ты — система подсчёта людей по видеокамере. "
+        "Посчитай ТОЧНОЕ количество людей на изображении. "
+        "Не считай постеры, фотографии, отражения в стекле, тени. "
+        "Считай только реальных людей.\n\n"
+        "Ответь ТОЛЬКО JSON: {\"count\": число, \"details\": \"кто и где на изображении\"}"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"Камера: {emoji} {label}. Сколько людей на этом изображении?"},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            ],
+        },
+    ]
+
+    payload = {
+        "model": LLAMA_MODEL,
+        "messages": messages,
+        "max_tokens": 512,
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+    }
+
+    headers = {"Authorization": f"Bearer {LLAMA_TOKEN}"}
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(LLAMA_URL, json=payload, headers=headers)
+        resp.raise_for_status()
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+
+async def count_people_single_camera_with_yolo(frame):
     """Посчитать людей на одном кадре."""
     label = frame.get("label", "")
     emoji = frame.get("emoji", "")
@@ -244,7 +288,7 @@ def save_camera_images(frames, snap_key):
 
 def send_text_message(room_token, message):
     """Отправить текстовое сообщение в чат Talk от имени mountian_admin."""
-    url = f"{NEXTCLOUD_URL}/ocs/v2.php/apps/spreed/api/v1/chat/{room_token}/message"
+    url = f"{NEXTCLOUD_URL}/ocs/v2.php/apps/spreed/api/v1/chat/{room_token}"
     headers = {
         "OCS-APIRequest": "true",
         "Accept": "application/json",
@@ -298,6 +342,40 @@ def upload_and_share_image(room_token, jpeg_data, caption):
     )
     print(f"  ✅ Изображение отправлено от {NEXTCLOUD_API_USER}: {caption}")
 
+
+def draw_bboxes(image_bytes, bboxes, color='red', width=2):
+    """
+    Рисует bounding boxes на изображении
+
+    Args:
+        image_bytes: изображение в формате bytes
+        bboxes: список bbox'ов в формате [[x1,y1,x2,y2], ...]
+        color: цвет рамки
+        width: толщина линии
+
+    Returns:
+        bytes: изображение с нарисованными bbox'ами
+    """
+    if len(bboxes) == 0:
+        return image_bytes
+
+    # Открываем изображение из bytes
+    image = Image.open(io.BytesIO(image_bytes))
+
+    # Создаем объект для рисования
+    draw = ImageDraw.Draw(image)
+
+    # Рисуем каждый bbox
+    for bbox in bboxes:
+        x1, y1, x2, y2 = bbox
+        draw.rectangle([x1, y1, x2, y2], outline=color, width=width)
+
+    # Конвертируем обратно в bytes
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format=image.format or 'JPEG')
+    img_byte_arr = img_byte_arr.getvalue()
+
+    return img_byte_arr
 
 # ---------------------------------------------------------------------------
 # Основной flow
@@ -497,11 +575,11 @@ async def main():
                 emoji = frame.get("emoji", "")
                 img_caption = f"{emoji} {label}: {count} чел. — {now.strftime('%H:%M')}"
                 upload_and_share_image(NEXTCLOUD_ROOM_TOKEN, frame["jpeg"], img_caption)
-                break
+                # break
 
     else:
         print(f"\n[{now.isoformat()}] Людей не обнаружено — уведомление не отправляем.")
 
-
 if __name__ == "__main__":
+    YOLO_MODEL = YOLO("yolo26n.pt")
     asyncio.run(main())

@@ -3,45 +3,39 @@
 
 Логика:
 1. Захватываем кадры со всех камер параллельно через ffmpeg.
-2. Сжимаем кадры, сохраняем в data/office/images/ и отправляем в llama.cpp vision-модель.
-3. Модель для каждой камеры говорит, кого видит.
-4. Затем отправляем все кадры вместе для deduplication.
-5. Если обнаружены люди — отправляем сообщение с фото в Nextcloud Talk.
-6. Сохраняем структурированные отчёты в data/office/.
+2. Запускаем YOLO на каждом кадре для детекции людей.
+3. Сохраняем кадры с bbox'ами и структурированные отчёты.
+4. Если обнаружены люди — отправляем сообщение с фото в Nextcloud Talk.
 
 Запуск: PYTHONPATH=. python bots/camera_people_count.py
 """
 
 import asyncio
-import base64
 import io
 import json
 import os
-import re
 import sys
 from datetime import datetime
 
+import cv2
 from PIL import Image, ImageDraw
-import httpx
 import requests
 from requests.auth import HTTPBasicAuth
-
 from ultralytics import YOLO
 
 from config import RTSP_BASE, NEXTCLOUD_URL, NEXTCLOUD_API_USER, NEXTCLOUD_API_PASSWORD
 from bots.camera import CAMERAS, build_rtsp_url, capture_rtsp_frame
 
 # ---------------------------------------------------------------------------
-# llama.cpp vision-сервер
+# Настройки
 # ---------------------------------------------------------------------------
 
-LLAMA_URL = "http://192.168.128.226:8080/v1/chat/completions"
-LLAMA_TOKEN = "llama.cpp"
-LLAMA_MODEL = "/var/lib/llama.cpp/models/Qwen3.6-35B-A3B-MTP-UD-Q4_K_M.gguf"
+# YOLO
+YOLO_CONFIDENCE = 0.3
 
 # Сжатие
-MAX_WIDTH = 640
-QUALITY = 50
+MAX_WIDTH = 1280
+QUALITY = 90
 
 # Nextcloud Talk
 NEXTCLOUD_ROOM_TOKEN = "wsyrbhp7"
@@ -62,10 +56,6 @@ def compress_jpeg(jpeg_bytes):
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=QUALITY, optimize=True)
     return buf.getvalue()
-
-
-def jpeg_to_base64(jpeg_bytes):
-    return base64.b64encode(jpeg_bytes).decode("utf-8")
 
 
 async def capture_all_cameras():
@@ -103,169 +93,80 @@ async def _capture_one(key, rtsp_url, camera):
 
 
 # ---------------------------------------------------------------------------
-# Vision-анализ через llama.cpp
+# YOLO-детекция людей
 # ---------------------------------------------------------------------------
 
-async def count_people_single_camera(frame):
-    """Посчитать людей на одном кадре."""
-    label = frame.get("label", "")
-    emoji = frame.get("emoji", "")
+def detect_people(jpeg_bytes, model):
+    """Запустить YOLO на кадре и вернуть количество людей + bbox'и.
 
-    b64 = jpeg_to_base64(frame["jpeg"])
+    Args:
+        jpeg_bytes: JPEG-байты кадра.
+        model: загруженная YOLO-модель.
 
-    system_prompt = (
-        "Ты — система подсчёта людей по видеокамере. "
-        "Посчитай ТОЧНОЕ количество людей на изображении. "
-        "Не считай постеры, фотографии, отражения в стекле, тени. "
-        "Считай только реальных людей.\n\n"
-        "Ответь ТОЛЬКО JSON: {\"count\": число, \"details\": \"кто и где на изображении\"}"
-    )
+    Returns:
+        dict с ключами:
+          count (int): число людей
+          bboxes (list[list[int]]): [[x1,y1,x2,y2], ...] в пикселях исходного размера
+          confidences (list[float]): уверенности детекции
+    """
+    import numpy as np
+    # YOLO принимает numpy-матрицу (BGR) — декодируем JPEG через cv2
+    arr = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    results = model(img, conf=YOLO_CONFIDENCE, verbose=False)
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": f"Камера: {emoji} {label}. Сколько людей на этом изображении?"},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-            ],
-        },
-    ]
+    bboxes = []
+    confidences = []
+    for box in results[0].boxes:
+        cls_id = int(box.cls.item())
+        conf = float(box.conf.item())
+        # COCO class 0 = person
+        if cls_id == 0:
+            xyxy = box.xyxy[0].cpu().numpy().astype(int)
+            bboxes.append(xyxy.tolist())
+            confidences.append(conf)
 
-    payload = {
-        "model": LLAMA_MODEL,
-        "messages": messages,
-        "max_tokens": 512,
-        "temperature": 0,
-        "response_format": {"type": "json_object"},
+    return {
+        "count": len(bboxes),
+        "bboxes": bboxes,
+        "confidences": confidences,
     }
 
-    headers = {"Authorization": f"Bearer {LLAMA_TOKEN}"}
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(LLAMA_URL, json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+def draw_bboxes(image_bytes, bboxes, color='red', width=2):
+    """
+    Рисует bounding boxes на изображении.
 
-async def count_people_single_camera_with_yolo(frame):
-    """Посчитать людей на одном кадре."""
-    label = frame.get("label", "")
-    emoji = frame.get("emoji", "")
+    Args:
+        image_bytes: изображение в формате bytes
+        bboxes: список bbox'ов в формате [[x1,y1,x2,y2], ...]
+        color: цвет рамки
+        width: толщина линии
 
-    b64 = jpeg_to_base64(frame["jpeg"])
+    Returns:
+        bytes: изображение с нарисованными bbox'ами
+    """
+    if len(bboxes) == 0:
+        return image_bytes
 
-    system_prompt = (
-        "Ты — система подсчёта людей по видеокамере. "
-        "Посчитай ТОЧНОЕ количество людей на изображении. "
-        "Не считай постеры, фотографии, отражения в стекле, тени. "
-        "Считай только реальных людей.\n\n"
-        "Ответь ТОЛЬКО JSON: {\"count\": число, \"details\": \"кто и где на изображении\"}"
-    )
+    image = Image.open(io.BytesIO(image_bytes))
+    draw = ImageDraw.Draw(image)
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": f"Камера: {emoji} {label}. Сколько людей на этом изображении?"},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-            ],
-        },
-    ]
+    for bbox in bboxes:
+        x1, y1, x2, y2 = bbox
+        draw.rectangle([x1, y1, x2, y2], outline=color, width=width)
 
-    payload = {
-        "model": LLAMA_MODEL,
-        "messages": messages,
-        "max_tokens": 512,
-        "temperature": 0,
-        "response_format": {"type": "json_object"},
-    }
-
-    headers = {"Authorization": f"Bearer {LLAMA_TOKEN}"}
-
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(LLAMA_URL, json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
-
-
-async def dedup_across_cameras(frames_with_counts):
-    """Финальный запрос: отправить все кадры и попросить deduplicate."""
-    image_parts = []
-    camera_descs = []
-
-    for key in sorted(frames_with_counts.keys()):
-        frame = frames_with_counts[key]
-        if "error" in frame:
-            continue
-        b64 = jpeg_to_base64(frame["jpeg"])
-        image_parts.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
-        })
-        label = frame.get("label", key)
-        emoji = frame.get("emoji", "")
-        count = frames_with_counts[key].get("count", "?")
-        camera_descs.append(f"- {emoji} {label} ({key}): модель насчитала {count} чел.")
-
-    labels_text = "\n".join(camera_descs)
-
-    system_prompt = (
-        "Ты — система подсчёта уникальных людей в офисе по нескольким камерам. "
-        "Каждая камера показывает свою зону. "
-        "Коридор может перехватывать людей из других зон. "
-        "Тебе нужно посчитать УНИКАЛЬНЫХ людей.\n\n"
-        "Правила:\n"
-        "1. Один человек в коридоре + в другой зоне = 1 человек.\n"
-        "2. Один человек в переговорке + в коридоре = 1 человек.\n"
-        "3. Серверная обычно пуста.\n\n"
-        "Сначала перечисли всех людей, которых видишь (по одежде/положению), "
-        "затем дай итоговый JSON: "
-        '{"total_unique": число, "dedup_notes": "текст"}'
-    )
-
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": (
-                        f"Результаты по камерам:\n{labels_text}\n\n"
-                        f"Учитывая overlap между зонами, сколько УНИКАЛЬНЫХ людей в офисе?"
-                    ),
-                },
-                *image_parts,
-            ],
-        },
-    ]
-
-    payload = {
-        "model": LLAMA_MODEL,
-        "messages": messages,
-        "max_tokens": 1024,
-        "temperature": 0,
-        "response_format": {"type": "json_object"},
-    }
-
-    headers = {"Authorization": f"Bearer {LLAMA_TOKEN}"}
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        resp = await client.post(LLAMA_URL, json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+    img_byte_arr = io.BytesIO()
+    image.save(img_byte_arr, format=image.format or 'JPEG')
+    return img_byte_arr.getvalue()
 
 
 # ---------------------------------------------------------------------------
 # Сохранение изображений камер
 # ---------------------------------------------------------------------------
 
-def save_camera_images(frames, snap_key):
-    """Сохранить сжатые кадры в data/office/images/."""
+def save_camera_images(frames, detection_results, snap_key):
+    """Сохранить сжатые кадры (с bbox'ами) в data/office/images/."""
     images_dir = "data/office/images"
     os.makedirs(images_dir, exist_ok=True)
 
@@ -276,8 +177,20 @@ def save_camera_images(frames, snap_key):
             continue
         filename = f"{snap_key}_{key}.jpg"
         filepath = os.path.join(images_dir, filename)
+
+        # Рисуем bbox'и если есть детекция
+        jpeg_out = frame["jpeg"]
+        det = detection_results.get(key, {})
+        if det.get("count", 0) > 0:
+            jpeg_out = draw_bboxes(
+                frame["jpeg"],
+                det["bboxes"],
+                color='red',
+                width=2,
+            )
+
         with open(filepath, "wb") as f:
-            f.write(frame["jpeg"])
+            f.write(jpeg_out)
         saved.append((key, frame.get("label", key), frame.get("emoji", ""), len(frame["jpeg"])))
     return saved
 
@@ -343,40 +256,6 @@ def upload_and_share_image(room_token, jpeg_data, caption):
     print(f"  ✅ Изображение отправлено от {NEXTCLOUD_API_USER}: {caption}")
 
 
-def draw_bboxes(image_bytes, bboxes, color='red', width=2):
-    """
-    Рисует bounding boxes на изображении
-
-    Args:
-        image_bytes: изображение в формате bytes
-        bboxes: список bbox'ов в формате [[x1,y1,x2,y2], ...]
-        color: цвет рамки
-        width: толщина линии
-
-    Returns:
-        bytes: изображение с нарисованными bbox'ами
-    """
-    if len(bboxes) == 0:
-        return image_bytes
-
-    # Открываем изображение из bytes
-    image = Image.open(io.BytesIO(image_bytes))
-
-    # Создаем объект для рисования
-    draw = ImageDraw.Draw(image)
-
-    # Рисуем каждый bbox
-    for bbox in bboxes:
-        x1, y1, x2, y2 = bbox
-        draw.rectangle([x1, y1, x2, y2], outline=color, width=width)
-
-    # Конвертируем обратно в bytes
-    img_byte_arr = io.BytesIO()
-    image.save(img_byte_arr, format=image.format or 'JPEG')
-    img_byte_arr = img_byte_arr.getvalue()
-
-    return img_byte_arr
-
 # ---------------------------------------------------------------------------
 # Основной flow
 # ---------------------------------------------------------------------------
@@ -405,119 +284,69 @@ async def main():
         print("Не удалось захватить ни одного кадра.")
         sys.exit(1)
 
-    # 2. Сохраняем изображения камер
-    save_camera_images(frames, snap_key)
-    print(f"\n[{now.isoformat()}] Изображения сохранены в data/office/images/")
-
-    # 3. Посчёт людей на каждой камере отдельно
-    print(f"\n[{now.isoformat()}] Анализ каждой камеры отдельно...")
-    per_camera_counts = {}
+    # 2. YOLO-детекция на каждом кадре
+    print(f"\n[{now.isoformat()}] YOLO-детекция людей...")
+    detection_results = {}
     for key in sorted(frames.keys()):
         frame = frames[key]
         if "error" in frame:
-            per_camera_counts[key] = {"error": frame["error"]}
+            detection_results[key] = {"error": frame["error"]}
             continue
         try:
-            raw = await count_people_single_camera(frame)
-            # Парсим JSON
-            try:
-                parsed = json.loads(raw)
-            except json.JSONDecodeError:
-                m = re.search(r'\{\s*\"count"', raw)
-                if m:
-                    end = raw.rfind("}")
-                    parsed = json.loads(raw[m.start():end + 1]) if end != -1 else None
-                else:
-                    parsed = {"count": -1, "details": raw}
-
-            count = parsed.get("count", -1)
-            details = parsed.get("details", "")
-            per_camera_counts[key] = {"count": count, "details": details}
+            result = detect_people(frame["jpeg"], model)
+            detection_results[key] = result
             emoji = frame.get("emoji", "")
             label = frame.get("label", key)
-            print(f"  {emoji} {label}: {count} чел. — {details}")
+            print(f"  {emoji} {label}: {result['count']} чел. (conf: {[f'{c:.2f}' for c in result['confidences']]})")
         except Exception as e:
-            per_camera_counts[key] = {"error": str(e)}
+            detection_results[key] = {"error": str(e)}
             print(f"  ERR {key}: {e}")
 
-    # 4. Deduplication: отправляем все кадры вместе
-    print(f"\n[{now.isoformat()}] Deduplication: анализ overlap между камерами...")
-    try:
-        dedup_raw = await dedup_across_cameras({k: v for k, v in frames.items() if "error" not in v})
-    except Exception as e:
-        print(f"Ошибка deduplication: {e}")
-        dedup_raw = None
+    # 3. Сохраняем изображения с bbox'ами
+    save_camera_images(frames, detection_results, snap_key)
+    print(f"\n[{now.isoformat()}] Изображения сохранены в data/office/images/")
 
-    print(f"\n[{now.isoformat()}] Анализ завершён.\n")
-    print("Ответ модели (deduplication):")
-    print(dedup_raw)
-
-    # 5. Формируем отчёт
-    total_unique = "N/A"
-    dedup_notes = ""
-
-    if dedup_raw:
-        try:
-            dedup_result = json.loads(dedup_raw)
-        except json.JSONDecodeError:
-            m = re.search(r'\{\s*\"total_unique"', dedup_raw)
-            if m:
-                end = dedup_raw.rfind("}")
-                if end != -1:
-                    dedup_result = json.loads(dedup_raw[m.start():end + 1])
-                else:
-                    dedup_result = {}
-            else:
-                dedup_result = {}
-        total_unique = dedup_result.get("total_unique", "N/A")
-        dedup_notes = dedup_result.get("dedup_notes", "")
-
-    # Если dedup не сработал, суммируем по камерам
-    if total_unique == "N/A":
-        print("\n⚠️ Deduplication не дал результата, суммируем по камерам.")
-        total = sum(v.get("count", 0) for v in per_camera_counts.values() if isinstance(v, dict) and "count" in v)
-        total_unique = total
+    # 4. Формируем отчёт
+    per_camera_counts = {}
+    total_people = 0
+    for key in sorted(frames.keys()):
+        det = detection_results.get(key, {})
+        count = det.get("count", 0) if isinstance(det, dict) and "error" not in det else 0
+        per_camera_counts[key] = {"count": count}
+        total_people += count
 
     print(f"\n{'=' * 50}")
-    print(f"  ЛЮДЕЙ В ОФИСЕ: {total_unique}")
+    print(f"  ЛЮДЕЙ В ОФИСЕ: {total_people}")
     print(f"{'=' * 50}")
     print("\nПо камерам:")
     for key in sorted(per_camera_counts.keys()):
         frame = frames.get(key, {})
-        label = frame.get("label", key)
-        emoji = frame.get("emoji", "")
         info = per_camera_counts.get(key, {})
-        count = info.get("count", "?") if isinstance(info, dict) else "?"
+        count = info.get("count", 0) if isinstance(info, dict) else 0
+        emoji = frame.get("emoji", "")
+        label = frame.get("label", key)
         print(f"  {emoji} {label}: {count}")
 
-    if dedup_notes:
-        print(f"\nЗаметки:\n{dedup_notes}")
-
-    # 6. Сохраняем результат в data/office/
+    # 5. Сохраняем результат в data/office/
     os.makedirs("data/office", exist_ok=True)
 
-    # 1) Сводный файл: последний результат (перезаписывается каждый раз)
     summary = {
         "timestamp": now.isoformat(),
-        "total_unique": total_unique,
-        "per_camera": {k: v.get("count", "?") if isinstance(v, dict) else "?" for k, v in per_camera_counts.items()},
-        "dedup_notes": dedup_notes,
+        "total_unique": total_people,
+        "per_camera": {k: v.get("count", 0) for k, v in per_camera_counts.items()},
     }
     summary_path = "data/office/latest.json"
     with open(summary_path, "w") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
 
-    # 2) Архивный файл: отдельный снимок по дате и времени
     archive_path = f"data/office/{snap_key}.json"
     archive = dict(summary)
-    archive["per_camera_full"] = per_camera_counts
-    archive["raw_dedup_answer"] = dedup_raw
+    archive["per_camera_full"] = detection_results
     with open(archive_path, "w") as f:
         json.dump(archive, f, ensure_ascii=False, indent=2)
 
-    # 3) CSV-файл: история в формате строк (дописываем)
     csv_path = "data/office/history.csv"
-    csv_header = "timestamp,total_unique,camera_key,count,details"
+    csv_header = "timestamp,total_unique,camera_key,count"
     csv_lines = []
     if os.path.exists(csv_path):
         with open(csv_path, "r") as f:
@@ -530,9 +359,8 @@ async def main():
 
     for key in sorted(per_camera_counts.keys()):
         info = per_camera_counts[key]
-        count = info.get("count", "?") if isinstance(info, dict) else "?"
-        details = (info.get("details", "") if isinstance(info, dict) else "").replace("\n", " ")
-        csv_lines.append(f"{now.isoformat()},{total_unique},{key},{count},\"{details}\"\n")
+        count = info.get("count", 0)
+        csv_lines.append(f"{now.isoformat()},{total_people},{key},{count}\n")
 
     with open(csv_path, "w") as f:
         f.writelines(csv_lines)
@@ -543,15 +371,14 @@ async def main():
     print(f"  История: {csv_path}")
     print(f"  Фото:    data/office/images/{snap_key}_*.jpg")
 
-    # 7. Если обнаружены люди — отправляем уведомление в Nextcloud Talk
-    if total_unique and int(total_unique) > 0:
+    # 6. Уведомление
+    if total_people > 0:
         print(f"\n[{now.isoformat()}] Обнаружены люди — отправляем уведомление в Nextcloud Talk...")
 
-        # Текстовое сообщение
         camera_lines = []
         for key in sorted(per_camera_counts.keys()):
             info = per_camera_counts[key]
-            count = info.get("count", 0) if isinstance(info, dict) else 0
+            count = info.get("count", 0)
             if count > 0:
                 frame = frames.get(key, {})
                 label = frame.get("label", key)
@@ -559,27 +386,31 @@ async def main():
                 camera_lines.append(f"  {emoji} {label}: {count}")
 
         text_msg = (
-            f"👥 В офисе обнаружено людей: {total_unique}\n\n"
+            f"👥 В офисе обнаружено людей: {total_people}\n\n"
             f"По камерам:\n" + "\n".join(camera_lines) + "\n\n"
             f"📸 Фото с камер: data/office/images/{snap_key}_*.jpg"
         )
         send_text_message(NEXTCLOUD_ROOM_TOKEN, text_msg)
 
-        # Изображение с камеры, где обнаружен человек (первая с count > 0)
         for key in sorted(per_camera_counts.keys()):
             info = per_camera_counts[key]
-            count = info.get("count", 0) if isinstance(info, dict) else 0
+            count = info.get("count", 0)
             if count > 0 and key in frames and "error" not in frames[key]:
                 frame = frames[key]
                 label = frame.get("label", key)
                 emoji = frame.get("emoji", "")
                 img_caption = f"{emoji} {label}: {count} чел. — {now.strftime('%H:%M')}"
-                upload_and_share_image(NEXTCLOUD_ROOM_TOKEN, frame["jpeg"], img_caption)
-                # break
-
+                # Рисуем bbox'и перед отправкой
+                img_with_bboxes = draw_bboxes(
+                    frame["jpeg"],
+                    detection_results[key]["bboxes"],
+                    color='red',
+                    width=2,
+                )
+                upload_and_share_image(NEXTCLOUD_ROOM_TOKEN, img_with_bboxes, img_caption)
     else:
         print(f"\n[{now.isoformat()}] Людей не обнаружено — уведомление не отправляем.")
 
 if __name__ == "__main__":
-    YOLO_MODEL = YOLO("yolo26n.pt")
+    model = YOLO("yolo26n.pt")
     asyncio.run(main())

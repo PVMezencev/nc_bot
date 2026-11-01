@@ -13,8 +13,11 @@ from bots.camera import CameraBot, BOT_NAME_CAMERA
 # Конфигурация
 import config
 from repo.mongo import Users
+from repo.postgres import DocumentRepository
+from web.app import router as web_router
 
 mongo_users_repo = Users(connection=config.MONGODB_CONNECTION)
+doc_repo = DocumentRepository()
 
 # Глобальный state-контейнер для DocumentBot (mutable, чтобы избежать global внутри lifespan)
 _state: dict = {}
@@ -24,6 +27,12 @@ _state: dict = {}
 async def lifespan(app_instance: FastAPI):
     """Lifespan-менеджер: старт и graceful shutdown."""
     # --- startup ---
+    app_instance.state.doc_repo = doc_repo
+    try:
+        await doc_repo.connect()
+    except Exception as e:
+        print(f"[main] Ошибка подключения к PostgreSQL: {e}")
+
     if config.DOCUMENT_CHAT_ROOM:
         doc_bot = DocumentBot(config.NEXTCLOUD_URL)
         doc_bot.start()
@@ -40,14 +49,18 @@ async def lifespan(app_instance: FastAPI):
     if doc_bot:
         doc_bot.stop()
         print("[main] DocumentBot остановлен")
+    await doc_repo.close()
 
 
 app = FastAPI(
     title="Nextcloud Talk Bot",
-    description="Бот для Nextcloud Talk",
-    version="1.0.0",
+    description="Бот для Nextcloud Talk + веб-интерфейс проверки документов",
+    version="1.1.0",
     lifespan=lifespan,
 )
+
+# Веб-интерфейс проверки данных документов (без авторизации — MVP)
+app.include_router(web_router)
 
 
 # Обработчик вебхуков для bot_general

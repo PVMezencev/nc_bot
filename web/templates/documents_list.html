@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Документы — Проверка документов{% endblock %}
+{% block content %}
+<h1>Документы ({{ items|length }})</h1>
+
+<div class="card">
+<table>
+    <tr><th>ID</th><th>Файл</th><th>Тип</th><th>Номер</th><th>Дата</th><th>Сумма</th><th>Позиций</th><th>Обработан</th><th></th></tr>
+    {% for d in items %}
+    <tr>
+        <td>{{ d.id }}</td>
+        <td><a href="/documents/{{ d.id }}">{{ d.file_name }}</a></td>
+        <td>{{ doc_type_labels.get(d.doc_type, d.doc_type) }}</td>
+        <td>{{ d.doc_number or '—' }}</td>
+        <td>{{ d.doc_date or '—' }}</td>
+        <td>{{ d.total_with_vat or d.total_amount or d.amount or d.contract_amount or '—' }}</td>
+        <td>{{ d.items_count }}</td>
+        <td>{{ d.processed_at }}</td>
+        <td><a class="btn btn-secondary" href="/documents/{{ d.id }}">Открыть</a></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="9">Документов нет</td></tr>
+    {% endfor %}
+</table>
+</div>
+{% endblock %}

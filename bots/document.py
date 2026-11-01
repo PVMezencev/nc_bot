@@ -31,6 +31,7 @@ import httpx
 
 from bots.common import Bot
 from nextcloud.nextcloudapi import NextcloudClient
+from repo.postgres import DocumentRepository
 from utilites import pdf_to_jpg_base64
 
 BOT_NAME_DOCUMENT = "bot_document"
@@ -873,6 +874,9 @@ class DocumentBot(Bot):
         )
         self.llama = LlamaClient(config.LLAMA_SERVER_URL)
 
+        # Репозиторий документов (PostgreSQL)
+        self.doc_repo = DocumentRepository()
+
         # Трекер обработанных файлов (href → timestamp)
         self._processed: Dict[str, float] = {}
 
@@ -910,6 +914,15 @@ class DocumentBot(Bot):
         if self._task and not self._task.done():
             return  # Уже запущен
         self._task = asyncio.create_task(self._poll_loop())
+        # Подключение к БД (схема создаётся автоматически)
+        asyncio.create_task(self._init_db())
+
+    async def _init_db(self) -> None:
+        """Подключиться к PostgreSQL и применить схему."""
+        try:
+            await self.doc_repo.connect()
+        except Exception as e:
+            print(f"[DocumentBot] Ошибка подключения к PostgreSQL: {e}")
 
     def stop(self) -> None:
         """Остановить фоновый опрос."""
@@ -1007,6 +1020,12 @@ class DocumentBot(Bot):
             print(f"[DocumentBot] {msg}")
             await self._notify(msg)
             return
+
+        # Сохранить сырые данные в PostgreSQL — на проверку пользователем через веб-интерфейс
+        try:
+            await self.doc_repo.save_raw_document(result)
+        except Exception as e:
+            print(f"[DocumentBot] Ошибка сохранения в БД: {e}")
 
         # Сформировать сообщение для чата
         doc_type = result.get("docType", DOCUMENT_TYPE_UNKNOWN)
@@ -1192,6 +1211,7 @@ class DocumentBot(Bot):
             f"• Чат для результатов: `{self.chat_room}`\n"
             f"• Интервал опроса: {self.poll_interval}с\n"
             f"• Llama server: `{config.LLAMA_SERVER_URL}`\n"
+            f"• PostgreSQL: `{config.POSTGRES_DSN.split('@')[-1] if config.POSTGRES_DSN else 'не задан'}`\n"
             f"• Обработано файлов (сессия): {len(self._processed)}\n"
             f"• Активен: {'✅' if self._task and not self._task.done() else '❌'}\n"
         )

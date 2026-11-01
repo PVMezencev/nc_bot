@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Сырые записи — Проверка документов{% endblock %}
+{% block content %}
+<h1>Полученные от бота записи</h1>
+
+<p>
+    <a class="btn {% if status == 'pending' %}btn-primary{% else %}btn-secondary{% endif %}" href="/raw?status=pending">⏳ На проверке ({{ pending_count }})</a>
+    <a class="btn {% if status == 'approved' %}btn-primary{% else %}btn-secondary{% endif %}" href="/raw?status=approved">✅ Сохранены</a>
+    <a class="btn {% if status == 'rejected' %}btn-primary{% else %}btn-secondary{% endif %}" href="/raw?status=rejected">❌ Отклонены</a>
+    <a class="btn {% if not status %}btn-primary{% else %}btn-secondary{% endif %}" href="/raw">Все</a>
+</p>
+
+<div class="card">
+<table>
+    <tr><th>ID</th><th>Файл</th><th>Тип</th><th>Номер</th><th>Статус</th><th>Получена</th><th></th></tr>
+    {% for it in items %}
+    <tr>
+        <td>{{ it.id }}</td>
+        <td><a href="/raw/{{ it.id }}">{{ it.file_name }}</a></td>
+        <td>{{ doc_type_labels.get(it.doc_type, it.doc_type) }}</td>
+        <td></td>
+        <td>{% set lbl, cls = status_labels[it.status] %}<span class="badge {{ cls }}">{{ lbl }}</span></td>
+        <td>{{ it.created_at.strftime('%d.%m.%Y %H:%M') if it.created_at else '' }}</td>
+        <td>{% if it.status == 'pending' %}<a class="btn btn-primary" href="/raw/{{ it.id }}">Проверить</a>{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7">Записей нет</td></tr>
+    {% endfor %}
+</table>
+</div>
+{% endblock %}

@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}Документ {{ doc.id }} — Проверка документов{% endblock %}
+{% block content %}
+<h1>Документ №{{ doc.id }}: {{ doc.file_name }}</h1>
+<p class="muted">
+    Тип: <b>{{ doc_type_labels.get(doc.doc_type, doc.doc_type) }}</b> ·
+    обработан {{ doc.processed_at.strftime('%d.%m.%Y %H:%M') if doc.processed_at else '—' }}
+</p>
+
+<form method="post" action="/documents/{{ doc.id }}">
+    <div class="card">
+        <h2>Основные данные</h2>
+        <div class="grid">
+            <div><label>Номер</label><input type="text" name="doc_number" value="{{ doc.doc_number or '' }}"></div>
+            <div><label>Дата</label><input type="text" name="doc_date" value="{{ doc.doc_date.strftime('%d.%m.%Y') if doc.doc_date else '' }}" placeholder="ДД.ММ.ГГГГ"></div>
+            {% if doc.ground is not none %}<div><label>Основание</label><input type="text" name="ground" value="{{ doc.ground or '' }}"></div>{% endif %}
+            {% if doc.payment_purpose is not none %}<div class="full"><label>Назначение платежа</label><input type="text" name="payment_purpose" value="{{ doc.payment_purpose or '' }}"></div>{% endif %}
+            {% if doc.amount is not none %}<div><label>Сумма к оплате</label><input type="text" name="amount" value="{{ doc.amount or '' }}"></div>{% endif %}
+            {% if doc.payment_deadline %}<div><label>Срок оплаты</label><input type="text" name="payment_deadline" value="{{ doc.payment_deadline.strftime('%d.%m.%Y') }}"></div>{% endif %}
+            {% if doc.place is not none %}<div><label>Место заключения</label><input type="text" name="place" value="{{ doc.place or '' }}"></div>{% endif %}
+            {% if doc.subject is not none %}<div class="full"><label>Предмет</label><textarea name="subject">{{ doc.subject or '' }}</textarea></div>{% endif %}
+            {% if doc.contract_amount is not none %}<div><label>Сумма договора</label><input type="text" name="contract_amount" value="{{ doc.contract_amount or '' }}"></div>{% endif %}
+            {% if doc.term_start %}<div><label>Начало действия</label><input type="text" name="term_start" value="{{ doc.term_start.strftime('%d.%m.%Y') }}"></div>{% endif %}
+            {% if doc.term_end %}<div><label>Окончание действия</label><input type="text" name="term_end" value="{{ doc.term_end.strftime('%d.%m.%Y') }}"></div>{% endif %}
+            {% if doc.payment_terms is not none %}<div class="full"><label>Порядок расчётов</label><textarea name="payment_terms">{{ doc.payment_terms or '' }}</textarea></div>{% endif %}
+            {% if doc.key_obligations is not none %}<div class="full"><label>Ключевые обязательства</label><textarea name="key_obligations">{{ doc.key_obligations or '' }}</textarea></div>{% endif %}
+            {% if doc.contract_ref is not none %}<div class="full"><label>Ссылка на договор</label><input type="text" name="contract_ref" value="{{ doc.contract_ref or '' }}"></div>{% endif %}
+            {% if doc.period_from %}<div><label>Период с</label><input type="text" name="period_from" value="{{ doc.period_from.strftime('%d.%m.%Y') }}"></div>{% endif %}
+            {% if doc.period_to %}<div><label>Период по</label><input type="text" name="period_to" value="{{ doc.period_to.strftime('%d.%m.%Y') }}"></div>{% endif %}
+            {% if doc.total_without_vat is not none %}<div><label>Итого без НДС</label><input type="text" name="total_without_vat" value="{{ doc.total_without_vat or '' }}"></div>{% endif %}
+            {% if doc.total_vat is not none %}<div><label>НДС</label><input type="text" name="total_vat" value="{{ doc.total_vat or '' }}"></div>{% endif %}
+            {% if doc.total_with_vat is not none %}<div><label>Итого с НДС</label><input type="text" name="total_with_vat" value="{{ doc.total_with_vat or '' }}"></div>{% endif %}
+            {% if doc.total_amount is not none %}<div><label>Итого</label><input type="text" name="total_amount" value="{{ doc.total_amount or '' }}"></div>{% endif %}
+            {% if doc.has_disputes is not none %}
+            <div class="checkbox-row"><input type="checkbox" id="has_disputes" name="has_disputes" value="on" {% if doc.has_disputes %}checked{% endif %}><label for="has_disputes" style="margin:0">Есть претензии</label></div>
+            {% endif %}
+            {% if doc.dispute_text is not none %}<div class="full"><label>Претензии</label><textarea name="dispute_text">{{ doc.dispute_text or '' }}</textarea></div>{% endif %}
+            {% if doc.letter_subject is not none %}<div class="full"><label>Тема письма</label><input type="text" name="letter_subject" value="{{ doc.letter_subject or '' }}"></div>{% endif %}
+            {% if doc.summary is not none %}<div class="full"><label>Краткое содержание</label><textarea name="summary">{{ doc.summary or '' }}</textarea></div>{% endif %}
+            {% if doc.full_text is not none %}<div class="full"><label>Полный текст</label><textarea name="full_text" style="min-height:120px">{{ doc.full_text or '' }}</textarea></div>{% endif %}
+            {% if doc.requires_action is not none %}
+            <div class="checkbox-row"><input type="checkbox" id="requires_action" name="requires_action" value="on" {% if doc.requires_action %}checked{% endif %}><label for="requires_action" style="margin:0">Требует действий</label></div>
+            {% endif %}
+            {% if doc.detected_type is not none %}<div><label>Предполагаемый тип</label><input type="text" name="detected_type" value="{{ doc.detected_type or '' }}"></div>{% endif %}
+            {% if doc.extracted_text is not none %}<div class="full"><label>Извлечённый текст</label><textarea name="extracted_text" style="min-height:120px">{{ doc.extracted_text or '' }}</textarea></div>{% endif %}
+            <div class="full"><label>Примечания</label><textarea name="notes">{{ doc.notes or '' }}</textarea></div>
+        </div>
+    </div>
+
+    {% if doc.counterparties %}
+    <div class="card">
+        <h2>Стороны (из договора)</h2>
+        <table>
+            <tr><th>Наименование</th><th>ИНН</th><th>КПП</th></tr>
+            {% for c in doc.counterparties %}
+            <tr><td><a href="/counterparties/{{ c.id }}">{{ c.name or '—' }}</a></td><td>{{ c.inn or '—' }}</td><td>{{ c.kpp or '—' }}</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+    {% endif %}
+
+    <div class="actions">
+        <button type="submit" class="btn btn-primary">💾 Сохранить документ</button>
+        <a class="btn btn-secondary" href="/documents">← К списку</a>
+    </div>
+</form>
+
+{% if doc.items_list %}
+<div class="card">
+    <h2>Позиции ({{ doc.items_list|length }})</h2>
+    <form method="post" action="/documents/{{ doc.id }}/items">
+        <input type="hidden" name="n_items" value="{{ doc.items|length }}">
+        <table>
+            <tr><th>Наименование</th><th>Кол-во</th><th>Ед.</th><th>Цена</th><th>Сумма</th><th>НДС %</th><th>НДС</th></tr>
+            {% for it in doc.items_list %}
+            <tr>
+                <td style="min-width:200px"><input type="text" name="item_{{ loop.index0 }}_name" value="{{ it.name or '' }}"></td>
+                <td><input type="text" name="item_{{ loop.index0 }}_quantity" value="{{ it.quantity or '' }}" style="width:70px"></td>
+                <td><input type="text" name="item_{{ loop.index0 }}_unit" value="{{ it.unit or '' }}" style="width:60px"></td>
+                <td><input type="text" name="item_{{ loop.index0 }}_price" value="{{ it.price or '' }}" style="width:90px"></td>
+                <td><input type="text" name="item_{{ loop.index0 }}_amount" value="{{ it.amount or '' }}" style="width:90px"></td>
+                <td><input type="text" name="item_{{ loop.index0 }}_vat_rate" value="{{ it.vat_rate or '' }}" style="width:60px"></td>
+                <td><input type="text" name="item_{{ loop.index0 }}_vat_amount" value="{{ it.vat_amount or '' }}" style="width:90px"></td>
+            </tr>
+            {% endfor %}
+        </table>
+        <div class="actions">
+            <button type="submit" class="btn btn-primary">💾 Сохранить позиции</button>
+        </div>
+    </form>
+</div>
+{% endif %}
+
+{% if doc.personal %}
+<div class="card">
+    <h2>Личный документ</h2>
+    <table>
+        <tr><th>Подтип</th><td>{{ doc.personal.sub_type or '—' }}</td></tr>
+        <tr><th>Владелец</th><td>{{ doc.personal.holder_name or '—' }}</td></tr>
+        <tr><th>Серия</th><td>{{ doc.personal.series or '—' }}</td></tr>
+        <tr><th>Кем выдан</th><td>{{ doc.personal.issued_by or '—' }}</td></tr>
+        <tr><th>Дата выдачи</th><td>{{ doc.personal.issue_date.strftime('%d.%m.%Y') if doc.personal.issue_date else '—' }}</td></tr>
+        <tr><th>Действует до</th><td>{{ doc.personal.expiry_date.strftime('%d.%m.%Y') if doc.personal.expiry_date else '—' }}</td></tr>
+        <tr><th>ФИО</th><td>{{ doc.personal.full_name or '—' }}</td></tr>
+        <tr><th>Дата рождения</th><td>{{ doc.personal.date_of_birth.strftime('%d.%m.%Y') if doc.personal.date_of_birth else '—' }}</td></tr>
+        <tr><th>Место рождения</th><td>{{ doc.personal.place_of_birth or '—' }}</td></tr>
+        <tr><th>Адрес</th><td>{{ doc.personal.address or '—' }}</td></tr>
+        <tr><th>Пол</th><td>{{ doc.personal.gender or '—' }}</td></tr>
+    </table>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{% if is_new %}Новый контрагент{% else %}Контрагент {{ cp.id }}{% endif %} — Проверка документов{% endblock %}
+{% block content %}
+<h1>{% if is_new %}Новый контрагент{% else %}Контрагент: {{ cp.name or 'без названия' }}{% endif %}</h1>
+
+<form method="post" action="/counterparties/save">
+    {% if not is_new %}<input type="hidden" name="cp_id" value="{{ cp.id }}">{% endif %}
+    <div class="card">
+        <div class="grid">
+            {% for field, label, ftype in fields %}
+            <div>
+                <label>{{ label }}</label>
+                <input type="text" name="{{ field }}" value="{{ cp.get(field) or '' }}">
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="actions">
+        <button type="submit" class="btn btn-primary">💾 Сохранить</button>
+        <a class="btn btn-secondary" href="/counterparties">← К списку</a>
+        {% if not is_new %}
+        <form method="post" action="/counterparties/{{ cp.id }}/delete" style="display:inline"
+              onsubmit="return confirm('Удалить контрагента?')">
+            <button type="submit" class="btn btn-danger">🗑 Удалить</button>
+        </form>
+        {% endif %}
+    </div>
+</form>
+{% endblock %}

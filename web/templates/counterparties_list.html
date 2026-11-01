@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Контрагенты — Проверка документов{% endblock %}
+{% block content %}
+<h1>Справочник контрагентов ({{ items|length }})</h1>
+
+<div class="card">
+    <form method="get" action="/counterparties" style="display:flex;gap:10px;margin-bottom:15px">
+        <input type="text" name="q" value="{{ q }}" placeholder="Поиск: наименование или ИНН" style="max-width:320px">
+        <button type="submit" class="btn btn-secondary">Найти</button>
+        <a class="btn btn-primary" href="/counterparties/new">+ Новый контрагент</a>
+    </form>
+    <table>
+        <tr><th>ID</th><th>Наименование</th><th>ИНН</th><th>КПП</th><th>ОГРН</th><th>Адрес</th><th></th></tr>
+        {% for c in items %}
+        <tr>
+            <td>{{ c.id }}</td>
+            <td><a href="/counterparties/{{ c.id }}">{{ c.name or '—' }}</a></td>
+            <td>{{ c.inn or '—' }}</td>
+            <td>{{ c.kpp or '—' }}</td>
+            <td>{{ c.ogrn or '—' }}</td>
+            <td>{{ c.address or '—' }}</td>
+            <td><a class="btn btn-secondary" href="/counterparties/{{ c.id }}">Изменить</a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7">Контрагентов нет</td></tr>
+        {% endfor %}
+    </table>
+</div>
+{% endblock %}

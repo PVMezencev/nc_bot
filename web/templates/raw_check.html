@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Проверка: {{ data.fileName }} — Проверка документов{% endblock %}
+{% block content %}
+<h1>Проверка данных: {{ data.fileName }}</h1>
+<p class="muted">
+    Тип: <b>{{ doc_type_labels.get(doc_type, doc_type) }}</b> ·
+    получено {{ raw.created_at.strftime('%d.%m.%Y %H:%M') }} ·
+    запись №{{ raw.id }}
+</p>
+
+<form method="post" action="/raw/{{ raw.id }}/save">
+    {% for title, fields in groups %}
+    <div class="card">
+        <h2>{{ title }}</h2>
+        <div class="grid">
+            {% for json_key, html_name, ftype in fields %}
+            <div class="{% if ftype == 'textarea' %}full{% endif %}">
+                {% if ftype == 'boolean' %}
+                <div class="checkbox-row">
+                    <input type="checkbox" id="{{ html_name }}" name="{{ html_name }}" value="on"
+                        {% if values.get(html_name) == 'on' %}checked{% endif %}>
+                    <label for="{{ html_name }}" style="margin:0">{{ json_key.split('.')[-1] }}</label>
+                </div>
+                {% elif ftype == 'textarea' %}
+                <label>{{ json_key.split('.')[-1] }}</label>
+                <textarea name="{{ html_name }}">{{ values.get(html_name, '') }}</textarea>
+                {% else %}
+                <label>{{ json_key.split('.')[-1] }}</label>
+                <input type="{{ ftype }}" name="{{ html_name }}" value="{{ values.get(html_name, '') }}">
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+
+    {% if items %}
+    <div class="card">
+        <h2>Позиции ({{ items|length }}) — редактируются после сохранения</h2>
+        <table>
+            <tr><th>#</th><th>Наименование</th><th>Кол-во</th><th>Ед.</th><th>Цена</th><th>Сумма</th><th>НДС %</th><th>НДС</th></tr>
+            {% for it in items %}
+            <tr>
+                <td>{{ loop.index }}</td>
+                <td>{{ it.name or it.description or '—' }}</td>
+                <td>{{ it.quantity or '—' }}</td>
+                <td>{{ it.unit or '' }}</td>
+                <td>{{ it.price or '—' }}</td>
+                <td>{{ it.amount or '—' }}</td>
+                <td>{{ it.vatRate or '' }}</td>
+                <td>{{ it.vatAmount or '' }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+    {% endif %}
+
+    <div class="actions">
+        <button type="submit" class="btn btn-primary">💾 Сохранить</button>
+        <button type="submit" formaction="/raw/{{ raw.id }}/reject" class="btn btn-danger">✖ Отклонить</button>
+        <a class="btn btn-secondary" href="/raw?status=pending">← К списку</a>
+    </div>
+</form>
+
+<div class="card">
+    <details>
+        <summary>Сырой JSON от бота</summary>
+        <pre class="raw">{{ raw_json }}</pre>
+    </details>
+</div>
+{% endblock %}

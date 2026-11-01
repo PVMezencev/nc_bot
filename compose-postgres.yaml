@@ -1,0 +1,17 @@
+services:
+  postgres-documents:
+    image: postgres:16
+    container_name: smm-bot-postgres
+    restart: always
+    ports:
+      - "5433:5432"   # 5432 уже занят контейнером llama-balancer-db
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-documents}
+      - POSTGRES_USER=${POSTGRES_USER:-documents}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-documents}
+    volumes:
+      - postgres_documents_data:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+
+volumes:
+  postgres_documents_data:

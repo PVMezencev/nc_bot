@@ -346,47 +346,58 @@ async def document_save(request: Request, doc_id: int, form: Dict[str, str] = Fo
 
     from repo.postgres import parse_date, to_number, to_text, to_bool
 
-    updates = {
-        "doc_number": to_text(form.get("doc_number")),
-        "doc_date": parse_date(form.get("doc_date")),
-        "ground": to_text(form.get("ground")),
-        "payment_purpose": to_text(form.get("payment_purpose")),
-        "amount": to_number(form.get("amount")),
-        "payment_deadline": parse_date(form.get("payment_deadline")),
-        "place": to_text(form.get("place")),
-        "subject": to_text(form.get("subject")),
-        "contract_amount": to_number(form.get("contract_amount")),
-        "term_start": parse_date(form.get("term_start")),
-        "term_end": parse_date(form.get("term_end")),
-        "payment_terms": to_text(form.get("payment_terms")),
-        "key_obligations": to_text(form.get("key_obligations")),
-        "contract_ref": to_text(form.get("contract_ref")),
-        "period_from": parse_date(form.get("period_from")),
-        "period_to": parse_date(form.get("period_to")),
-        "total_without_vat": to_number(form.get("total_without_vat")),
-        "total_vat": to_number(form.get("total_vat")),
-        "total_with_vat": to_number(form.get("total_with_vat")),
-        "total_amount": to_number(form.get("total_amount")),
-        "has_disputes": to_bool(form.get("has_disputes")),
-        "dispute_text": to_text(form.get("dispute_text")),
-        "letter_subject": to_text(form.get("letter_subject")),
-        "summary": to_text(form.get("summary")),
-        "full_text": to_text(form.get("full_text")),
-        "requires_action": to_bool(form.get("requires_action")),
-        "detected_type": to_text(form.get("detected_type")),
-        "extracted_text": to_text(form.get("extracted_text")),
-        "notes": to_text(form.get("notes")),
+    # Обновляем только поля, которые реально пришли в форме (не пустые).
+    # Пустые значения не затирают существующие данные.
+    field_map = {
+        "doc_number": ("doc_number", to_text),
+        "doc_date": ("doc_date", parse_date),
+        "ground": ("ground", to_text),
+        "payment_purpose": ("payment_purpose", to_text),
+        "amount": ("amount", to_number),
+        "payment_deadline": ("payment_deadline", parse_date),
+        "place": ("place", to_text),
+        "subject": ("subject", to_text),
+        "contract_amount": ("contract_amount", to_number),
+        "term_start": ("term_start", parse_date),
+        "term_end": ("term_end", parse_date),
+        "payment_terms": ("payment_terms", to_text),
+        "key_obligations": ("key_obligations", to_text),
+        "contract_ref": ("contract_ref", to_text),
+        "period_from": ("period_from", parse_date),
+        "period_to": ("period_to", parse_date),
+        "total_without_vat": ("total_without_vat", to_number),
+        "total_vat": ("total_vat", to_number),
+        "total_with_vat": ("total_with_vat", to_number),
+        "total_amount": ("total_amount", to_number),
+        "dispute_text": ("dispute_text", to_text),
+        "letter_subject": ("letter_subject", to_text),
+        "summary": ("summary", to_text),
+        "full_text": ("full_text", to_text),
+        "detected_type": ("detected_type", to_text),
+        "extracted_text": ("extracted_text", to_text),
+        "notes": ("notes", to_text),
     }
 
-    set_clause = ", ".join(f"{k} = ${i + 1}" for i, k in enumerate(updates))
-    async with repo._pool.acquire() as conn:
-        await conn.execute(
-            f"UPDATE documents SET {set_clause} WHERE id = ${len(updates) + 1}",
-            *updates.values(), doc_id,
-        )
-        # обновление позиций
-        for i, item in enumerate(form.get("items", [])):
-            pass  # позиции редактируются отдельными POST-запросами (см. ниже)
+    updates: Dict[str, Any] = {}
+    for form_key, (col, converter) in field_map.items():
+        raw_val = form.get(form_key, "")
+        val = converter(raw_val)
+        if val is not None:
+            updates[col] = val
+
+    # Чекбоксы: обновляем только если пришли
+    if "has_disputes" in form:
+        updates["has_disputes"] = form.get("has_disputes") == "on"
+    if "requires_action" in form:
+        updates["requires_action"] = form.get("requires_action") == "on"
+
+    if updates:
+        set_clause = ", ".join(f"{k} = ${i + 1}" for i, k in enumerate(updates))
+        async with repo._pool.acquire() as conn:
+            await conn.execute(
+                f"UPDATE documents SET {set_clause} WHERE id = ${len(updates) + 1}",
+                *updates.values(), doc_id,
+            )
 
     return RedirectResponse(f"/documents/{doc_id}", status_code=303)
 

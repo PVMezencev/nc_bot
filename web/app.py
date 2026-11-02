@@ -332,7 +332,7 @@ async def document_edit_page(request: Request, doc_id: int):
 
     return templates.TemplateResponse(
         "document_edit.html",
-        {"request": request, "doc": doc},
+        {"request": request, "doc": doc, "doc_type_labels": DOC_TYPE_LABELS},
     )
 
 

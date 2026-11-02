@@ -248,9 +248,11 @@ async def raw_check(request: Request, raw_id: int):
 
 
 @router.post("/raw/{raw_id}/save")
-async def raw_save(request: Request, raw_id: int, form: Dict[str, str] = Form({})):
+async def raw_save(request: Request, raw_id: int):
     """Сохранить проверенные данные: запись в документы, статус approved."""
     repo = get_repo(request)
+    form_data = await request.form()
+    form = dict(form_data)
     raw = await repo.get_raw_document(raw_id)
     if not raw:
         return HTMLResponse("<h1>Запись не найдена</h1>", status_code=404)
@@ -337,9 +339,11 @@ async def document_edit_page(request: Request, doc_id: int):
 
 
 @router.post("/documents/{doc_id}")
-async def document_save(request: Request, doc_id: int, form: Dict[str, str] = Form({})):
+async def document_save(request: Request, doc_id: int):
     """Обновить поля документа."""
     repo = get_repo(request)
+    form_data = await request.form()
+    form = dict(form_data)
     row = await repo._pool.fetchrow("SELECT * FROM documents WHERE id = $1", doc_id)
     if not row:
         return HTMLResponse("<h1>Документ не найден</h1>", status_code=404)
@@ -403,9 +407,11 @@ async def document_save(request: Request, doc_id: int, form: Dict[str, str] = Fo
 
 
 @router.post("/documents/{doc_id}/items")
-async def document_items_save(request: Request, doc_id: int, form: Dict[str, str] = Form({})):
+async def document_items_save(request: Request, doc_id: int):
     """Перезаписать позиции документа."""
     repo = get_repo(request)
+    form_data = await request.form()
+    form = dict(form_data)
     from repo.postgres import to_number, to_text
 
     async with repo._pool.acquire() as conn:
@@ -498,9 +504,11 @@ async def counterparty_edit_page(request: Request, cp_id: int):
 
 
 @router.post("/counterparties/save")
-async def counterparty_save(request: Request, form: Dict[str, str] = Form({})):
+async def counterparty_save(request: Request):
     """Создать (cp_id пустой) или обновить контрагента."""
     repo = get_repo(request)
+    form_data = await request.form()
+    form = dict(form_data)
     from repo.postgres import to_text
 
     cp_id = form.get("cp_id") or ""

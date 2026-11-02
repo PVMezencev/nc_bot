@@ -602,28 +602,127 @@ class LlamaClient:
     async def process_document(self, file_name: str, file_data: bytes,
                                source_type: str) -> dict:
         """
-        Полный пайплайн: классификация → извлечение данных.
+        Полный пайплайн: классификация → извлечение данных (3 прохода с голосованием).
         source_type: 'pdf' или 'image' — формат источника.
         """
         # Конвертируем в список изображений base64
         if source_type == "pdf":
             images_base64 = pdf_to_jpg_base64(file_data)
-            # pdf_to_jpg_base64 возвращает один строковый base64 (объединённые страницы)
             if isinstance(images_base64, str):
                 images_base64 = [images_base64]
         else:
-            # Изображение — кодировать как base64
             b64 = base64.b64encode(file_data).decode("ascii")
             images_base64 = [b64]
 
         async with httpx.AsyncClient() as client:
-            # Шаг 1: классификация
+            # Шаг 1: классификация (один раз)
             doc_type = await self.classify_document(client, images_base64, file_name)
             print(f"[LlamaClient] Определён тип: {doc_type} ({DOCUMENT_TYPE_LABELS.get(doc_type)})")
 
-            # Шаг 2: извлечение данных
-            result = await self.extract_document_data(client, images_base64, file_name, doc_type)
+            # Шаг 2: извлечение данных — 3 прохода
+            results = []
+            for attempt in range(3):
+                try:
+                    r = await self.extract_document_data(client, images_base64, file_name, doc_type)
+                    results.append(r)
+                    print(f"[LlamaClient] Проход {attempt + 1}/3: {'OK' if 'parseError' not in r else 'ERROR'}")
+                except Exception as e:
+                    print(f"[LlamaClient] Проход {attempt + 1}/3 ошибка: {e}")
+                    results.append({"docType": doc_type, "fileName": file_name, "parseError": str(e)})
+
+            # Шаг 3: голосование — берём значения, совпавшие минимум в 2 из 3
+            result = self._vote_results(results, doc_type, file_name)
             return result
+
+    @staticmethod
+    def _vote_results(results: list, doc_type: str, file_name: str) -> dict:
+        """
+        Сравнить 3 результата и выбрать значения, совпавшие минимум в 2 из 3.
+        Для вложенных dict (supplier, buyer, executor, customer и т.д.) —
+        голосование по каждому под-ключу.
+        """
+        if not results:
+            return {"docType": doc_type, "fileName": file_name, "parseError": "Нет результатов"}
+
+        # Если все три одинаковые (по json) — просто берём первую
+        valid = [r for r in results if "parseError" not in r]
+        if len(valid) == 3:
+            jsons = [json.dumps(r, sort_keys=True, ensure_ascii=False) for r in valid]
+            if jsons[0] == jsons[1] == jsons[2]:
+                return valid[0]
+
+        # Собираем все ключи из всех результатов
+        all_keys: set = set()
+        for r in valid:
+            all_keys.update(r.keys())
+
+        voted: dict = {}
+        for key in all_keys:
+            values = [r.get(key) for r in valid]
+            # Для вложенных dict — рекурсивное голосование
+            if any(isinstance(v, dict) for v in values if v is not None):
+                voted[key] = LlamaClient._vote_nested_dict(values)
+            else:
+                voted[key] = LlamaClient._vote_value(values)
+
+        # Убираем None
+        voted = {k: v for k, v in voted.items() if v is not None}
+        voted["docType"] = doc_type
+        voted["fileName"] = file_name
+        return voted
+
+    @staticmethod
+    def _vote_value(values: list) -> Any:
+        """Голосование для скалярного значения: majority из 3."""
+        from collections import Counter
+        # Нормализуем: None → sentinel, unhashable → JSON-строка
+        def normalize(v):
+            if v is None:
+                return "__NONE__"
+            try:
+                hash(v)
+                return v
+            except TypeError:
+                return json.dumps(v, sort_keys=True, ensure_ascii=False)
+
+        normalized = [normalize(v) for v in values]
+        counts = Counter(normalized)
+        best_norm, best_count = counts.most_common(1)[0]
+        if best_count >= 2:
+            # Возвращаем оригинальное значение (не нормализованное)
+            for v in values:
+                if normalize(v) == best_norm:
+                    return v
+            return None
+        # Нет majority — берём первое непустое
+        for v in values:
+            if v is not None:
+                return v
+        return None
+
+    @staticmethod
+    def _vote_nested_dict(values: list) -> dict:
+        """Голосование для вложенного dict: по каждому под-ключу."""
+        all_sub_keys: set = set()
+        dicts = []
+        for v in values:
+            if isinstance(v, dict):
+                dicts.append(v)
+                all_sub_keys.update(v.keys())
+            else:
+                dicts.append({})
+
+        if not dicts:
+            return None
+
+        result: dict = {}
+        for sk in all_sub_keys:
+            sub_vals = [d.get(sk) for d in dicts]
+            result[sk] = LlamaClient._vote_value(sub_vals)
+
+        # Убираем None
+        result = {k: v for k, v in result.items() if v is not None}
+        return result if result else None
 
 
 # ---------------------------------------------------------------------------

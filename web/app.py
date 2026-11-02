@@ -53,43 +53,87 @@ STATUS_LABELS = {
 # ---------------------------------------------------------------------------
 
 _notification_subscribers: List[asyncio.Queue] = []
+_global_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
+
+
+def _notification_subscribers_queue_empty() -> bool:
+    return _global_queue.empty()
 
 
 def notify_new_raw_document(raw_id: int, file_name: str, doc_type: str) -> None:
-    """Поставить событие о новом сыром документе в очереди всех подписчиков."""
+    """Поставить событие о новом сыром документе в глобальную очередь."""
     event = {
         "type": "new_raw_document",
         "id": raw_id,
         "file_name": file_name,
         "doc_type": doc_type,
     }
-    for q in _notification_subscribers:
-        try:
-            q.put_nowait(event)
-        except asyncio.QueueFull:
-            pass
+    try:
+        _global_queue.put_nowait(event)
+    except asyncio.QueueFull:
+        pass
 
 
 @router.get("/events")
 async def sse_events(request: Request):
-    """SSE-поток уведомлений о новых сырых документах."""
-    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-    _notification_subscribers.append(queue)
+    """
+    SSE-поток уведомлений о новых сырых документах.
+    Опрашивает БД каждые 5 секунд (бот может работать в другом процессе).
+    """
+    repo = get_repo(request)
+    last_seen_id: int = 0
+
+    # Начальная позиция — текущий max(id)
+    if repo._pool:
+        async with repo._pool.acquire() as conn:
+            row = await conn.fetchval("SELECT COALESCE(MAX(id), 0) FROM raw_documents")
+            last_seen_id = row or 0
 
     async def event_generator():
-        try:
-            yield "retry: 5000\n\n"
-            while True:
-                if await request.is_disconnected():
-                    break
+        nonlocal last_seen_id
+        yield "retry: 5000\n\n"
+        while True:
+            if await request.is_disconnected():
+                break
+
+            # Проверить новые записи в БД
+            new_events = []
+            if repo._pool:
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=25.0)
-                    yield f"event: new_raw_document\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
-                except asyncio.TimeoutError:
-                    # keepalive — чтобы соединение не рвалось прокси
-                    yield ": keepalive\n\n"
-        finally:
-            _notification_subscribers.remove(queue)
+                    async with repo._pool.acquire() as conn:
+                        rows = await conn.fetch(
+                            "SELECT id, file_name, doc_type FROM raw_documents "
+                            "WHERE id > $1 AND status = 'pending' ORDER BY id",
+                            last_seen_id,
+                        )
+                        for r in rows:
+                            new_events.append({
+                                "type": "new_raw_document",
+                                "id": r["id"],
+                                "file_name": r["file_name"],
+                                "doc_type": r["doc_type"],
+                            })
+                            last_seen_id = r["id"]
+                except Exception:
+                    pass
+
+            # Также проверить in-process уведомления (если бот в том же процессе)
+            while not _notification_subscribers_queue_empty():
+                try:
+                    ev = _global_queue.get_nowait()
+                    if ev["id"] > last_seen_id:
+                        new_events.append(ev)
+                        last_seen_id = ev["id"]
+                except asyncio.QueueEmpty:
+                    break
+
+            for ev in new_events:
+                yield f"event: new_raw_document\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"
+
+            if not new_events:
+                yield ": keepalive\n\n"
+
+            await asyncio.sleep(5)
 
     return StreamingResponse(
         event_generator(),

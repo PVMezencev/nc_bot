@@ -69,7 +69,7 @@
 <div class="card">
     <h2>Позиции ({{ doc.items_list|length }})</h2>
     <form method="post" action="/documents/{{ doc.id }}/items">
-        <input type="hidden" name="n_items" value="{{ doc.items|length }}">
+        <input type="hidden" name="n_items" value="{{ doc.items_list|length }}">
         <table>
             <tr><th>Наименование</th><th>Кол-во</th><th>Ед.</th><th>Цена</th><th>Сумма</th><th>НДС %</th><th>НДС</th></tr>
             {% for it in doc.items_list %}

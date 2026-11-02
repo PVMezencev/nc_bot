@@ -13,20 +13,20 @@
     <div class="card">
         <h2>{{ title }}</h2>
         <div class="grid">
-            {% for json_key, html_name, ftype in fields %}
+            {% for json_key, html_name, ftype, label in fields %}
             <div class="{% if ftype == 'textarea' %}full{% endif %}">
                 {% if ftype == 'boolean' %}
                 <div class="checkbox-row">
                     <input type="checkbox" id="{{ html_name }}" name="{{ html_name }}" value="on"
                         {% if values.get(html_name) == 'on' %}checked{% endif %}>
-                    <label for="{{ html_name }}" style="margin:0">{{ json_key.split('.')[-1] }}</label>
+                    <label for="{{ html_name }}" style="margin:0">{{ label }}</label>
                 </div>
                 {% elif ftype == 'textarea' %}
-                <label>{{ json_key.split('.')[-1] }}</label>
+                <label>{{ label }}</label>
                 <textarea name="{{ html_name }}">{{ values.get(html_name, '') }}</textarea>
                 {% else %}
-                <label>{{ json_key.split('.')[-1] }}</label>
-                <input type="{{ ftype }}" name="{{ html_name }}" value="{{ values.get(html_name, '') }}">
+                <label>{{ label }}</label>
+                <input type="text" name="{{ html_name }}" value="{{ values.get(html_name, '') }}">
                 {% endif %}
             </div>
             {% endfor %}

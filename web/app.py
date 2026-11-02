@@ -54,6 +54,7 @@ STATUS_LABELS = {
 
 _notification_subscribers: List[asyncio.Queue] = []
 _global_queue: asyncio.Queue = asyncio.Queue(maxsize=200)
+_shutdown_event: asyncio.Event = asyncio.Event()  # ставится при остановке приложения
 
 
 def _notification_subscribers_queue_empty() -> bool:
@@ -79,6 +80,7 @@ async def sse_events(request: Request):
     """
     SSE-поток уведомлений о новых сырых документах.
     Опрашивает БД каждые 5 секунд (бот может работать в другом процессе).
+    При shutdown — немедленно завершается.
     """
     repo = get_repo(request)
     last_seen_id: int = 0
@@ -93,7 +95,8 @@ async def sse_events(request: Request):
         nonlocal last_seen_id
         yield "retry: 5000\n\n"
         while True:
-            if await request.is_disconnected():
+            # Проверить disconnect или shutdown
+            if await request.is_disconnected() or _shutdown_event.is_set():
                 break
 
             # Проверить новые записи в БД
@@ -133,7 +136,12 @@ async def sse_events(request: Request):
             if not new_events:
                 yield ": keepalive\n\n"
 
-            await asyncio.sleep(5)
+            # Ждём 5 сек или shutdown (что наступит раньше)
+            try:
+                await asyncio.wait_for(_shutdown_event.wait(), timeout=5.0)
+                break  # shutdown
+            except asyncio.TimeoutError:
+                pass
 
     return StreamingResponse(
         event_generator(),

@@ -14,7 +14,7 @@ from bots.camera import CameraBot, BOT_NAME_CAMERA
 import config
 from repo.mongo import Users
 from repo.postgres import DocumentRepository
-from web.app import router as web_router
+from web.app import router as web_router, _shutdown_event as web_shutdown_event
 
 mongo_users_repo = Users(connection=config.MONGODB_CONNECTION)
 doc_repo = DocumentRepository()
@@ -45,6 +45,9 @@ async def lifespan(app_instance: FastAPI):
     yield
 
     # --- shutdown ---
+    # Сигнализируем SSE-стримам о завершении (чтобы не висели)
+    web_shutdown_event.set()
+
     doc_bot = _state.get("document_bot")
     if doc_bot:
         doc_bot.stop()

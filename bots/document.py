@@ -619,37 +619,38 @@ class LlamaClient:
             doc_type = await self.classify_document(client, images_base64, file_name)
             print(f"[LlamaClient] Определён тип: {doc_type} ({DOCUMENT_TYPE_LABELS.get(doc_type)})")
 
-            # Шаг 2: извлечение данных — 3 прохода
+            # Шаг 2: извлечение данных — 5 проходов
             results = []
-            for attempt in range(3):
+            for attempt in range(5):
                 try:
                     r = await self.extract_document_data(client, images_base64, file_name, doc_type)
                     results.append(r)
-                    print(f"[LlamaClient] Проход {attempt + 1}/3: {'OK' if 'parseError' not in r else 'ERROR'}")
+                    print(f"[LlamaClient] Проход {attempt + 1}/5: {'OK' if 'parseError' not in r else 'ERROR'}")
                 except Exception as e:
-                    print(f"[LlamaClient] Проход {attempt + 1}/3 ошибка: {e}")
+                    print(f"[LlamaClient] Проход {attempt + 1}/5 ошибка: {e}")
                     results.append({"docType": doc_type, "fileName": file_name, "parseError": str(e)})
 
-            # Шаг 3: голосование — берём значения, совпавшие минимум в 2 из 3
+            # Шаг 3: голосование — берём значения с большинством
             result = self._vote_results(results, doc_type, file_name)
             return result
 
     @staticmethod
     def _vote_results(results: list, doc_type: str, file_name: str) -> dict:
         """
-        Сравнить 3 результата и выбрать значения, совпавшие минимум в 2 из 3.
-        Для вложенных dict (supplier, buyer, executor, customer и т.д.) —
-        голосование по каждому под-ключу.
+        Сравнить N результатов и выбрать значения с большинством (>50%).
+        Для вложенных dict — голосование по каждому под-ключу.
         """
         if not results:
             return {"docType": doc_type, "fileName": file_name, "parseError": "Нет результатов"}
 
-        # Если все три одинаковые (по json) — просто берём первую
         valid = [r for r in results if "parseError" not in r]
-        if len(valid) == 3:
-            jsons = [json.dumps(r, sort_keys=True, ensure_ascii=False) for r in valid]
-            if jsons[0] == jsons[1] == jsons[2]:
-                return valid[0]
+        if not valid:
+            return {"docType": doc_type, "fileName": file_name, "parseError": "Все проходы завершились ошибкой"}
+
+        # Если все одинаковые — просто берём первую
+        jsons = [json.dumps(r, sort_keys=True, ensure_ascii=False) for r in valid]
+        if len(set(jsons)) == 1:
+            return valid[0]
 
         # Собираем все ключи из всех результатов
         all_keys: set = set()
@@ -659,7 +660,6 @@ class LlamaClient:
         voted: dict = {}
         for key in all_keys:
             values = [r.get(key) for r in valid]
-            # Для вложенных dict — рекурсивное голосование
             if any(isinstance(v, dict) for v in values if v is not None):
                 voted[key] = LlamaClient._vote_nested_dict(values)
             else:
@@ -673,8 +673,13 @@ class LlamaClient:
 
     @staticmethod
     def _vote_value(values: list) -> Any:
-        """Голосование для скалярного значения: majority из 3."""
+        """
+        Голосование для скалярного значения.
+        Берёт значение с большинством (>50% от непустых).
+        Если majority нет — берёт самое частое (хотя бы 1 совпадение).
+        """
         from collections import Counter
+
         # Нормализуем: None → sentinel, unhashable → JSON-строка
         def normalize(v):
             if v is None:
@@ -685,20 +690,28 @@ class LlamaClient:
             except TypeError:
                 return json.dumps(v, sort_keys=True, ensure_ascii=False)
 
-        normalized = [normalize(v) for v in values]
-        counts = Counter(normalized)
+        # Только непустые значения участвуют в голосовании
+        non_none = [(v, normalize(v)) for v in values if v is not None]
+        if not non_none:
+            return None
+
+        counts = Counter(norm for _, norm in non_none)
         best_norm, best_count = counts.most_common(1)[0]
-        if best_count >= 2:
-            # Возвращаем оригинальное значение (не нормализованное)
-            for v in values:
-                if normalize(v) == best_norm:
+
+        # Порог: >50% от непустых
+        threshold = len(non_none) // 2 + 1
+
+        if best_count >= threshold:
+            for v, norm in non_none:
+                if norm == best_norm:
                     return v
             return None
-        # Нет majority — берём первое непустое
-        for v in values:
-            if v is not None:
+
+        # Нет majority — берём самое частое (top-1 из Counter)
+        for v, norm in non_none:
+            if norm == best_norm:
                 return v
-        return None
+        return non_none[0][0]
 
     @staticmethod
     def _vote_nested_dict(values: list) -> dict:

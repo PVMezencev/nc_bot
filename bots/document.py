@@ -505,46 +505,53 @@ class LlamaClient:
                             images_base64: List[str],
                             file_name: str) -> str:
         """
-        Отправить изображения в OCR-llama (отдельный инстанс с моделью распознавания)
-        и вернуть распознанный текст. Возвращает '' при ошибке.
+        Отправить страницы в OCR-llama по одной и собрать полный текст.
+        Возвращает '' при ошибке.
         """
         if not self.ocr_url:
             return ""
-        try:
-            url = f"{self.ocr_url}/v1/chat/completions"
-            content_parts = []
-            for b64 in images_base64:
-                content_parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
-                })
-            content_parts.append({
-                "type": "text",
-                "text": (
-                    f"Файл: {file_name}\n"
-                    f"Распознай ВЕСЬ текст на изображении(ях) дословно. "
-                    f"Сохраняй форматирование, таблицы, номера. "
-                    f"Возвращай только распознанный текст без комментариев."
-                )
-            })
 
-            payload = {
-                "messages": [
-                    {"role": "system", "content": "Ты — OCR-распознаватель. Извлекай текст с изображений дословно, без добавлений и комментариев."},
-                    {"role": "user", "content": content_parts}
-                ],
-                "temperature": 0.0,
-            }
+        all_texts = []
+        for i, b64 in enumerate(images_base64):
+            try:
+                url = f"{self.ocr_url}/v1/chat/completions"
+                content_parts = [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Файл: {file_name}, страница {i + 1} из {len(images_base64)}\n"
+                            f"Распознай ВЕСЬ текст на изображении дословно. "
+                            f"Сохраняй форматирование, таблицы, номера. "
+                            f"Возвращай только распознанный текст без комментариев."
+                        )
+                    }
+                ]
 
-            resp = await client.post(url, json=payload, timeout=120.0)
-            resp.raise_for_status()
-            data = resp.json()
-            text = data["choices"][0]["message"]["content"].strip()
-            print(f"[OCR] Распознан текст: {len(text)} символов")
-            return text
-        except Exception as e:
-            print(f"[OCR] Ошибка: {e}")
-            return ""
+                payload = {
+                    "messages": [
+                        {"role": "system", "content": "Ты — OCR-распознаватель. Извлекай текст с изображения дословно, без добавлений и комментариев."},
+                        {"role": "user", "content": content_parts}
+                    ],
+                    "temperature": 0.0,
+                }
+
+                resp = await client.post(url, json=payload, timeout=120.0)
+                resp.raise_for_status()
+                data = resp.json()
+                text = data["choices"][0]["message"]["content"].strip()
+                all_texts.append(text)
+                print(f"[OCR] Страница {i + 1}/{len(images_base64)}: {len(text)} символов")
+            except Exception as e:
+                print(f"[OCR] Страница {i + 1} ошибка: {e}")
+                all_texts.append("")
+
+        full_text = "\n\n".join(t for t in all_texts if t)
+        print(f"[OCR] Итого: {len(full_text)} символов из {len(images_base64)} страниц")
+        return full_text
 
     async def _completion(self, client: httpx.AsyncClient, messages: list) -> str:
         """Вызвать /v1/chat/completions на llama.cpp server."""

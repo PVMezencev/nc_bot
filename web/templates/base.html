@@ -55,7 +55,7 @@
 <header>
     <span class="logo">📄 Проверка документов</span>
     <a href="/">Главная</a>
-    <a href="/raw?status=pending">Проверка <span class="badge badge-pending" id="pending-badge" style="margin-left:4px">{{ pending_count|default('', true) }}</span></a>
+    <a href="/raw?status=pending">Проверка <span class="badge badge-pending" id="pending-badge" style="margin-left:4px">…</span></a>
     <a href="/documents">Документы</a>
     <a href="/counterparties">Контрагенты</a>
 </header>
@@ -67,7 +67,7 @@
 
 <script>
 (function() {
-    var pendingCount = {{ pending_count|default(0, true) }};
+    var pendingCount = 0;
 
     function updateBadge() {
         var badge = document.getElementById('pending-badge');
@@ -80,6 +80,9 @@
             .then(function(d) { pendingCount = d.count; updateBadge(); })
             .catch(function() {});
     }
+
+    // При загрузке страницы — сразу получить актуальный счётчик
+    refreshPendingCount();
 
     var es = new EventSource('/events');
     es.addEventListener('new_raw_document', function(e) {

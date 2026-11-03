@@ -210,11 +210,12 @@ async def index(request: Request):
 @router.get("/raw", response_class=HTMLResponse)
 async def raw_list(request: Request, status: Optional[str] = None):
     repo = get_repo(request)
-    items = await repo.list_raw_documents(status=status or "pending")
+    # status=None → все, status='pending'/'approved'/'rejected' → фильтр
+    items = await repo.list_raw_documents(status=status if status else None)
     pending_count = await repo.count_raw_documents("pending")
     return templates.TemplateResponse(
         "raw_list.html",
-        {"request": request, "items": items, "status": status or "pending",
+        {"request": request, "items": items, "status": status or "",
          "pending_count": pending_count, "status_labels": STATUS_LABELS},
     )
 

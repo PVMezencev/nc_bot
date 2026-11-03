@@ -124,7 +124,18 @@ async def handle_webhook(
 
 # Запуск приложения
 if __name__ == "__main__":
+    import signal
     import uvicorn
+
+    # SIGTERM → сразу ставим shutdown event (SSE-стримы завершатся мгновенно)
+    def _sigterm_handler(signum, frame):
+        web_shutdown_event.set()
+        print("[main] SIGTERM получен, SSE-стримы останавливаются")
+        # Дальше uvicorn сам обработает SIGTERM через свой handler
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _sigterm_handler)
 
     uvicorn.run(
         app,

@@ -452,6 +452,7 @@ _SYSTEM_PROMT_TEMPLATE = """\
 {schema_json}
 
 Важно:
+- Даныне в документе должны быть строго перенесены в json, не придумывай данные и не добавляй ничего от себя.
 - Возвращай ТОЛЬКО валидный JSON, без markdown-обёртки ```json``` и без пояснений.
 - Если документ многостраничный — объедини данные со всех страниц.
 - Заполни все поля, которые удалось определить. Пропускай поля, которых нет в документе.
@@ -531,6 +532,7 @@ class LlamaClient:
         payload = {
             "messages": messages,
             "response_format": {"type": "json_object"},
+            "temperature": 0.0,
         }
         resp = await client.post(url, json=payload, timeout=360.0)
         resp.raise_for_status()

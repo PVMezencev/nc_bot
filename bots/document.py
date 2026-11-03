@@ -501,27 +501,47 @@ class LlamaClient:
         self.ocr_url = ocr_url.rstrip("/") if ocr_url else ""
         self._classify_prompt = _CLASSIFY_PROMPT
 
-    async def ocr_recognize(self, client: httpx.AsyncClient, file_data: bytes,
+    async def ocr_recognize(self, client: httpx.AsyncClient,
+                            images_base64: List[str],
                             file_name: str) -> str:
         """
-        Отправить файл в OCR-сервис и вернуть распознанный текст.
-        Возвращает '' при ошибке (фолбэк на изображения).
+        Отправить изображения в OCR-llama (отдельный инстанс с моделью распознавания)
+        и вернуть распознанный текст. Возвращает '' при ошибке.
         """
         if not self.ocr_url:
             return ""
         try:
-            url = f"{self.ocr_url}/recognize"
-            # Определяем content_type по расширению
-            import mimetypes
-            ct = mimetypes.guess_type(file_name)[0] or "image/jpeg"
-            files = {"file": (file_name, file_data, ct)}
-            resp = await client.post(url, files=files, timeout=120.0)
+            url = f"{self.ocr_url}/v1/chat/completions"
+            content_parts = []
+            for b64 in images_base64:
+                content_parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
+                })
+            content_parts.append({
+                "type": "text",
+                "text": (
+                    f"Файл: {file_name}\n"
+                    f"Распознай ВЕСЬ текст на изображении(ях) дословно. "
+                    f"Сохраняй форматирование, таблицы, номера. "
+                    f"Возвращай только распознанный текст без комментариев."
+                )
+            })
+
+            payload = {
+                "messages": [
+                    {"role": "system", "content": "Ты — OCR-распознаватель. Извлекай текст с изображений дословно, без добавлений и комментариев."},
+                    {"role": "user", "content": content_parts}
+                ],
+                "temperature": 0.0,
+            }
+
+            resp = await client.post(url, json=payload, timeout=120.0)
             resp.raise_for_status()
             data = resp.json()
-            full_text = data.get("full_text", "")
-            print(f"[OCR] Распознано {data.get('text_count', 0)} строк, "
-                  f"{len(full_text)} символов за {data.get('processing_time_s', '?')}s")
-            return full_text
+            text = data["choices"][0]["message"]["content"].strip()
+            print(f"[OCR] Распознан текст: {len(text)} символов")
+            return text
         except Exception as e:
             print(f"[OCR] Ошибка: {e}")
             return ""
@@ -709,8 +729,8 @@ class LlamaClient:
             images_base64 = [b64]
 
         async with httpx.AsyncClient() as client:
-            # Шаг 0: OCR — получить текст из документа
-            ocr_text = await self.ocr_recognize(client, file_data, file_name)
+            # Шаг 0: OCR — получить текст из документа (отдельный llama.cpp с моделью распознавания)
+            ocr_text = await self.ocr_recognize(client, images_base64, file_name)
             use_text = bool(ocr_text)  # если OCR дал текст — отправляем текст, иначе изображения
 
             if use_text:

@@ -262,10 +262,14 @@ async def raw_save(request: Request, raw_id: int):
     doc_type = data.get("docType", "unknown")
     result = build_result_from_form(data, form, doc_type)
 
-    doc_id = await repo.save_document(result)
-    await repo.mark_raw_document(raw_id, "approved", processed_doc_id=doc_id)
-    print(f"[web] Сырой документ {raw_id} сохранён → documents.id={doc_id}")
-    return RedirectResponse(f"/documents/{doc_id}", status_code=303)
+    try:
+        doc_id = await repo.save_document(result)
+        await repo.mark_raw_document(raw_id, "approved", processed_doc_id=doc_id)
+        print(f"[web] Сырой документ {raw_id} сохранён → documents.id={doc_id}")
+        return RedirectResponse(f"/documents/{doc_id}?saved=1", status_code=303)
+    except Exception as e:
+        print(f"[web] Ошибка сохранения raw {raw_id}: {e}")
+        return RedirectResponse(f"/raw/{raw_id}?error=1", status_code=303)
 
 
 @router.post("/raw/{raw_id}/reject")
@@ -404,7 +408,7 @@ async def document_save(request: Request, doc_id: int):
                 *updates.values(), doc_id,
             )
 
-    return RedirectResponse(f"/documents/{doc_id}", status_code=303)
+    return RedirectResponse(f"/documents/{doc_id}?saved=1", status_code=303)
 
 
 @router.post("/documents/{doc_id}/items")
@@ -438,7 +442,7 @@ async def document_items_save(request: Request, doc_id: int):
                     to_number(form.get(f"item_{i}_vat_rate")),
                     to_number(form.get(f"item_{i}_vat_amount")),
                 )
-    return RedirectResponse(f"/documents/{doc_id}", status_code=303)
+    return RedirectResponse(f"/documents/{doc_id}?saved=1", status_code=303)
 
 
 # ---------------------------------------------------------------------------

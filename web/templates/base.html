@@ -84,6 +84,24 @@
     // При загрузке страницы — сразу получить актуальный счётчик
     refreshPendingCount();
 
+    // Toast при ?saved=1 или ?error=1 в URL
+    var params = new URLSearchParams(window.location.search);
+    if (params.get('saved') === '1') {
+        showToast('✅ Документ сохранён', '#155724');
+    } else if (params.get('error') === '1') {
+        showToast('❌ Ошибка сохранения', '#721c24');
+    }
+
+    function showToast(msg, bg) {
+        var div = document.createElement('div');
+        div.className = 'toast';
+        div.style.background = bg || '#2c3e50';
+        div.textContent = msg;
+        div.onclick = function() { div.remove(); };
+        document.getElementById('toast-container').appendChild(div);
+        setTimeout(function() { div.remove(); }, 5000);
+    }
+
     var es = new EventSource('/events');
     es.addEventListener('new_raw_document', function(e) {
         var data = JSON.parse(e.data);

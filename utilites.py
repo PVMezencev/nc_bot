@@ -26,28 +26,17 @@ def unzip_archive(zip_file_path, to_dir):
 def pdf_to_jpg_base64(pdf_bytes) -> list:
     """
     Конвертирует PDF в список JPEG (base64) — по одному на страницу.
-    Каждая страница ограничена MAX_WIDTH × MAX_HEIGHT, чтобы не получить 413.
+    Без масштабирования — сохраняем исходное разрешение для точного распознавания.
     Возвращает List[str] (список base64-строк).
     """
-    MAX_DIM = 2000  # пикселей — ограничение по стороне для каждой страницы
-
     images = convert_from_bytes(pdf_bytes, poppler_path='/usr/bin')
     if not images:
         return []
 
     result = []
     for img in images:
-        # Масштабируем страницу если слишком большая
-        scale = 1.0
-        if img.width > MAX_DIM or img.height > MAX_DIM:
-            scale = min(MAX_DIM / img.width, MAX_DIM / img.height)
-            if scale < 1.0:
-                new_w = int(img.width * scale)
-                new_h = int(img.height * scale)
-                img = img.resize((new_w, new_h), Image.LANCZOS)
-
         buffer = BytesIO()
-        img.save(buffer, format="JPEG", quality=80, optimize=True)
+        img.save(buffer, format="JPEG", quality=95, optimize=True)
         result.append(base64.b64encode(buffer.getvalue()).decode("utf-8"))
 
     return result

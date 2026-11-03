@@ -704,8 +704,6 @@ class LlamaClient:
         # Конвертируем в список изображений base64 (фолбэк, если OCR не работает)
         if source_type == "pdf":
             images_base64 = pdf_to_jpg_base64(file_data)
-            if isinstance(images_base64, str):
-                images_base64 = [images_base64]
         else:
             b64 = base64.b64encode(file_data).decode("ascii")
             images_base64 = [b64]

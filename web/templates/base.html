@@ -74,6 +74,8 @@
         if (badge) badge.textContent = pendingCount;
         var stat = document.getElementById('stat-pending');
         if (stat) stat.textContent = pendingCount;
+        var link = document.getElementById('stat-pending-link');
+        if (link) link.textContent = pendingCount;
     }
 
     function refreshPendingCount() {

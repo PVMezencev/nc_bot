@@ -493,11 +493,37 @@ _CLASSIFY_PROMPT = """\
 # ---------------------------------------------------------------------------
 
 class LlamaClient:
-    """Клиент для llama.cpp server (OpenAI-compatible API)."""
+    """Клиент для llama.cpp server (OpenAI-compatible API) + OCR-сервис."""
 
-    def __init__(self, server_url: str):
+    def __init__(self, server_url: str, ocr_url: str = ""):
         self.server_url = server_url.rstrip("/")
+        self.ocr_url = ocr_url.rstrip("/") if ocr_url else ""
         self._classify_prompt = _CLASSIFY_PROMPT
+
+    async def ocr_recognize(self, client: httpx.AsyncClient, file_data: bytes,
+                            file_name: str) -> str:
+        """
+        Отправить файл в OCR-сервис и вернуть распознанный текст.
+        Возвращает '' при ошибке (фолбэк на изображения).
+        """
+        if not self.ocr_url:
+            return ""
+        try:
+            url = f"{self.ocr_url}/recognize"
+            # Определяем content_type по расширению
+            import mimetypes
+            ct = mimetypes.guess_type(file_name)[0] or "image/jpeg"
+            files = {"file": (file_name, file_data, ct)}
+            resp = await client.post(url, files=files, timeout=120.0)
+            resp.raise_for_status()
+            data = resp.json()
+            full_text = data.get("full_text", "")
+            print(f"[OCR] Распознано {data.get('text_count', 0)} строк, "
+                  f"{len(full_text)} символов за {data.get('processing_time_s', '?')}s")
+            return full_text
+        except Exception as e:
+            print(f"[OCR] Ошибка: {e}")
+            return ""
 
     async def _completion(self, client: httpx.AsyncClient, messages: list) -> str:
         """Вызвать /v1/chat/completions на llama.cpp server."""
@@ -545,6 +571,36 @@ class LlamaClient:
             pass
 
         # Иначе — ищем значение типа в тексте
+        for doc_type in SCHEMA_MAP:
+            if doc_type in result.lower():
+                return doc_type
+
+        return DOCUMENT_TYPE_UNKNOWN
+
+    async def classify_document_text(self, client: httpx.AsyncClient,
+                                     ocr_text: str, file_name: str) -> str:
+        """Классификация по OCR-тексту (без изображений)."""
+        messages = [
+            {"role": "system", "content": "Ты — классификатор документов. Отвечай только одним значением типа."},
+            {"role": "user", "content": (
+                f"Файл: {file_name}\n"
+                f"Текст документа:\n{ocr_text[:4000]}\n\n"
+                f"{self._classify_prompt}"
+            )}
+        ]
+
+        result = await self._completion(client, messages)
+        result = result.strip().strip("`").strip()
+
+        try:
+            parsed = json.loads(result)
+            if isinstance(parsed, dict):
+                detected = parsed.get("docType", parsed.get("type", ""))
+                if detected in SCHEMA_MAP:
+                    return detected
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
         for doc_type in SCHEMA_MAP:
             if doc_type in result.lower():
                 return doc_type
@@ -599,13 +655,51 @@ class LlamaClient:
                 "parseError": "Не удалось распарсить JSON-ответ от модели"
             }
 
+    async def extract_document_data_text(self, client: httpx.AsyncClient,
+                                         ocr_text: str,
+                                         file_name: str,
+                                         doc_type: str) -> dict:
+        """Извлечь данные по OCR-тексту (без изображений)."""
+        system_prompt = build_system_prompt(doc_type)
+        label = DOCUMENT_TYPE_LABELS.get(doc_type, doc_type)
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": (
+                f"Файл: {file_name}\n"
+                f"Документ классифицирован как: {label}\n"
+                f"Текст документа (OCR):\n{ocr_text}\n\n"
+                f"Извлеки структурированные данные согласно JSON-схеме для типа \"{doc_type}\".\n"
+                f"Возвращай ТОЛЬКО валидный JSON."
+            )}
+        ]
+
+        result_text = await self._completion(client, messages)
+
+        # Очистка markdown-обёртки
+        result_text = result_text.strip()
+        if result_text.startswith("```"):
+            lines = result_text.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            result_text = "\n".join(lines).strip()
+
+        try:
+            return json.loads(result_text)
+        except json.JSONDecodeError:
+            return {
+                "docType": doc_type,
+                "fileName": file_name,
+                "rawResponse": result_text,
+                "parseError": "Не удалось распарсить JSON-ответ от модели"
+            }
+
     async def process_document(self, file_name: str, file_data: bytes,
                                source_type: str) -> dict:
         """
-        Полный пайплайн: классификация → извлечение данных (3 прохода с голосованием).
+        Полный пайплайн: OCR → классификация → извлечение данных (5 проходов с голосованием).
         source_type: 'pdf' или 'image' — формат источника.
         """
-        # Конвертируем в список изображений base64
+        # Конвертируем в список изображений base64 (фолбэк, если OCR не работает)
         if source_type == "pdf":
             images_base64 = pdf_to_jpg_base64(file_data)
             if isinstance(images_base64, str):
@@ -615,15 +709,30 @@ class LlamaClient:
             images_base64 = [b64]
 
         async with httpx.AsyncClient() as client:
+            # Шаг 0: OCR — получить текст из документа
+            ocr_text = await self.ocr_recognize(client, file_data, file_name)
+            use_text = bool(ocr_text)  # если OCR дал текст — отправляем текст, иначе изображения
+
+            if use_text:
+                print(f"[LlamaClient] Используем OCR-текст ({len(ocr_text)} символов) вместо изображений")
+            else:
+                print(f"[LlamaClient] OCR недоступен, используем изображения")
+
             # Шаг 1: классификация (один раз)
-            doc_type = await self.classify_document(client, images_base64, file_name)
+            if use_text:
+                doc_type = await self.classify_document_text(client, ocr_text, file_name)
+            else:
+                doc_type = await self.classify_document(client, images_base64, file_name)
             print(f"[LlamaClient] Определён тип: {doc_type} ({DOCUMENT_TYPE_LABELS.get(doc_type)})")
 
             # Шаг 2: извлечение данных — 5 проходов
             results = []
             for attempt in range(5):
                 try:
-                    r = await self.extract_document_data(client, images_base64, file_name, doc_type)
+                    if use_text:
+                        r = await self.extract_document_data_text(client, ocr_text, file_name, doc_type)
+                    else:
+                        r = await self.extract_document_data(client, images_base64, file_name, doc_type)
                     results.append(r)
                     print(f"[LlamaClient] Проход {attempt + 1}/5: {'OK' if 'parseError' not in r else 'ERROR'}")
                 except Exception as e:
@@ -984,7 +1093,7 @@ class DocumentBot(Bot):
             config.NEXTCLOUD_API_USER,
             config.NEXTCLOUD_API_PASSWORD,
         )
-        self.llama = LlamaClient(config.LLAMA_SERVER_URL)
+        self.llama = LlamaClient(config.LLAMA_SERVER_URL, ocr_url=config.OCR_SERVICE_URL)
 
         # Репозиторий документов (PostgreSQL)
         self.doc_repo = DocumentRepository()

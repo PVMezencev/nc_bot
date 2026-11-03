@@ -122,9 +122,47 @@
         document.getElementById('toast-container').appendChild(div);
         setTimeout(function() { div.remove(); }, 15000);
 
+        // Системное уведомление браузера
+        if ("Notification" in window && Notification.permission === "granted") {
+            var n = new Notification("📄 Новый документ", {
+                body: data.file_name + " (" + label + ")",
+                tag: "doc-" + data.id,
+                requireInteraction: false
+            });
+            n.onclick = function() { window.focus(); window.location.href = "/raw/" + data.id; n.close(); };
+        }
+
+        // Мигание заголовка вкладки
+        flashTitle(data.file_name, label);
+
         // Пересинхронизировать точный счётчик с бэкенда
         refreshPendingCount();
     });
+
+    // Мигание заголовка вкладки
+    var _flashInterval = null;
+    var _origTitle = document.title;
+    function flashTitle(fileName, label) {
+        if (_flashInterval) return; // уже мигает
+        var i = 0;
+        _flashInterval = setInterval(function() {
+            i++;
+            document.title = (i % 2 === 0) ? _origTitle : "📄 " + fileName + " (" + label + ")";
+        }, 1500);
+    }
+    window.addEventListener('focus', function() {
+        if (_flashInterval) { clearInterval(_flashInterval); _flashInterval = null; }
+        document.title = _origTitle;
+    });
+
+    // Запрашиваем разрешение на уведомления при первой загрузке
+    if ("Notification" in window && Notification.permission === "default") {
+        // Не спамим — запрашиваем при первом клике пользователя
+        var asked = false;
+        document.addEventListener('click', function() {
+            if (!asked) { asked = true; Notification.requestPermission(); }
+        }, { once: false });
+    }
     es.onerror = function() { /* EventSource переподключается автоматически */ };
 })();
 </script>

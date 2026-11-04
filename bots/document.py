@@ -24,15 +24,20 @@ import mimetypes
 import os
 import urllib.parse
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
+import logging
 
 import config
 import httpx
+from collections import Counter
 
 from bots.common import Bot
 from nextcloud.nextcloudapi import NextcloudClient
 from repo.postgres import DocumentRepository
 from utilites import pdf_to_jpg_base64
+
+
+logger = logging.getLogger(__name__)
 
 BOT_NAME_DOCUMENT = "bot_document"
 
@@ -496,10 +501,13 @@ _CLASSIFY_PROMPT = """\
 class LlamaClient:
     """Клиент для llama.cpp server (OpenAI-compatible API) + OCR-сервис."""
 
-    def __init__(self, server_url: str, ocr_url: str = ""):
+    def __init__(self, server_url: str, ocr_url: str = "", steps_count=3):
         self.server_url = server_url.rstrip("/")
         self.ocr_url = ocr_url.rstrip("/") if ocr_url else ""
         self._classify_prompt = _CLASSIFY_PROMPT
+        if not isinstance(steps_count, int) or steps_count < 3 or steps_count % 2 == 0:
+            raise Exception("параметр steps_count должен быть ≥ 3 и не может быть чётным")
+        self.steps_count = steps_count
 
     async def ocr_recognize(self, client: httpx.AsyncClient,
                             images_base64: List[str],
@@ -533,7 +541,8 @@ class LlamaClient:
 
                 payload = {
                     "messages": [
-                        {"role": "system", "content": "Ты — OCR-распознаватель. Извлекай текст с изображения дословно, без добавлений и комментариев."},
+                        {"role": "system",
+                         "content": "Ты — OCR-распознаватель. Извлекай текст с изображения дословно, без добавлений и комментариев."},
                         {"role": "user", "content": content_parts}
                     ],
                     "temperature": 0.0,
@@ -544,13 +553,13 @@ class LlamaClient:
                 data = resp.json()
                 text = data["choices"][0]["message"]["content"].strip()
                 all_texts.append(text)
-                print(f"[OCR] Страница {i + 1}/{len(images_base64)}: {len(text)} символов")
+                logger.info(f"[OCR] Страница {i + 1}/{len(images_base64)}: {len(text)} символов")
             except Exception as e:
-                print(f"[OCR] Страница {i + 1} ошибка: {e}")
+                logger.info(f"[OCR] Страница {i + 1} ошибка: {e}")
                 all_texts.append("")
 
         full_text = "\n\n".join(t for t in all_texts if t)
-        print(f"[OCR] Итого: {len(full_text)} символов из {len(images_base64)} страниц")
+        logger.info(f"[OCR] Итого: {len(full_text)} символов из {len(images_base64)} страниц")
         return full_text
 
     async def _completion(self, client: httpx.AsyncClient, messages: list) -> str:
@@ -562,7 +571,7 @@ class LlamaClient:
             "temperature": 0.0,
         }
 
-        print(f"[LlamaClient] DEBUG: client.post({url})\n\tpayload: {payload}")
+        logger.debug(f"[LlamaClient]: client.post({url})\n\tpayload: {payload}")
 
         resp = await client.post(url, json=payload, timeout=360.0)
         resp.raise_for_status()
@@ -672,9 +681,10 @@ class LlamaClient:
                 "text": (
                     f"Страница {page} файла {file_name}\n"
                     f"Документ классифицирован как: {label}\n"
-                    f"С предыдущих страниц уже извлечен текст: {'\n'.join(_results)}\n - учитывай его тоже.\n" if len(_results) > 0 else ""
-                    f"Извлеки структурированные данные согласно JSON-схеме для типа \"{doc_type}\".\n"
-                    f"Возвращай ТОЛЬКО валидный JSON."
+                    f"С предыдущих страниц уже извлечен текст: {'\n'.join(_results)}\n - учитывай его тоже.\n" if len(
+                        _results) > 0 else ""
+                                           f"Извлеки структурированные данные согласно JSON-схеме для типа \"{doc_type}\".\n"
+                                           f"Возвращай ТОЛЬКО валидный JSON."
                 )
             })
 
@@ -747,7 +757,7 @@ class LlamaClient:
     async def process_document(self, file_name: str, file_data: bytes,
                                source_type: str) -> dict:
         """
-        Полный пайплайн: OCR → классификация → извлечение данных (5 проходов с голосованием).
+        Полный пайплайн: OCR → классификация → извлечение данных (несколько проходов с голосованием).
         source_type: 'pdf' или 'image' — формат источника.
         """
         # Конвертируем в список изображений base64 (фолбэк, если OCR не работает)
@@ -766,9 +776,9 @@ class LlamaClient:
             use_text = bool(ocr_text)  # если OCR дал текст — отправляем текст, иначе изображения
 
             if use_text:
-                print(f"[LlamaClient] Используем OCR-текст ({len(ocr_text)} символов) вместо изображений")
+                logger.info(f"[LlamaClient] Используем OCR-текст ({len(ocr_text)} символов) вместо изображений")
             else:
-                print(f"[LlamaClient] OCR недоступен, используем изображения")
+                logger.info(f"[LlamaClient] OCR недоступен, используем изображения")
 
             # Шаг 1: классификация (один раз)
             if use_text:
@@ -776,21 +786,21 @@ class LlamaClient:
             else:
                 # Для определения типа документа достаточно отправить первую страницу.
                 first_page = images_base64[0]
-                doc_type = await self.classify_document(client,  [first_page], file_name)
-            print(f"[LlamaClient] Определён тип: {doc_type} ({DOCUMENT_TYPE_LABELS.get(doc_type)})")
+                doc_type = await self.classify_document(client, [first_page], file_name)
+            logger.info(f"[LlamaClient] Определён тип: {doc_type} ({DOCUMENT_TYPE_LABELS.get(doc_type)})")
 
-            # Шаг 2: извлечение данных — 5 проходов
+            # Шаг 2: извлечение данных — steps_count проходов
             results = []
-            for attempt in range(5):
+            for attempt in range(self.steps_count):
                 try:
                     if use_text:
                         r = await self.extract_document_data_text(client, ocr_text, file_name, doc_type)
                     else:
                         r = await self.extract_document_data(client, images_base64, file_name, doc_type)
                     results.append(r)
-                    print(f"[LlamaClient] Проход {attempt + 1}/5: {'OK' if 'parseError' not in r else 'ERROR'}")
+                    logger.info(f"[LlamaClient] Проход {attempt + 1}/{self.steps_count}: {'OK' if 'parseError' not in r else 'ERROR'}")
                 except Exception as e:
-                    print(f"[LlamaClient] Проход {attempt + 1}/5 ошибка: {e}")
+                    logger.info(f"[LlamaClient] Проход {attempt + 1}/{self.steps_count} ошибка: {e}")
                     results.append({"docType": doc_type, "fileName": file_name, "parseError": str(e)})
 
             # Шаг 3: голосование — берём значения с большинством
@@ -798,24 +808,108 @@ class LlamaClient:
             return result
 
     @staticmethod
+    def _normalize_for_vote(v: Any) -> Any:
+        """Приводит значение к хешируемому виду для подсчёта голосов."""
+        if v is None:
+            return "__NONE__"
+        try:
+            hash(v)
+            return v
+        except TypeError:
+            return json.dumps(v, sort_keys=True, ensure_ascii=False, default=str)
+
+    @staticmethod
+    def _vote_value(values: list) -> Any:
+        """
+        Голосование для скалярного значения.
+
+        Возвращает значение, набравшее строгое большинство (>50%) среди
+        непустых голосов. Если строгого большинства нет (в т.ч. ничья
+        при чётном числе голосов или все значения разные) — возвращает None.
+        """
+        non_none = [v for v in values if v is not None]
+        if not non_none:
+            return None
+
+        norms = [LlamaClient._normalize_for_vote(v) for v in non_none]
+        counts = Counter(norms)
+
+        # При равенстве частот most_common может вернуть любой из лидеров,
+        # поэтому явно проверяем, что лидер единственный.
+        best_norm, best_count = counts.most_common(1)[0]
+        leaders = [n for n, c in counts.items() if c == best_count]
+        if len(leaders) > 1:
+            # Ничья по частоте — строгого большинства быть не может
+            return None
+
+        threshold = len(non_none) // 2 + 1  # строго >50%
+        if best_count < threshold:
+            return None
+
+        # Возвращаем исходное (не нормализованное) значение
+        for v, norm in zip(non_none, norms):
+            if norm == best_norm:
+                return v
+        return None  # недостижимо, но на всякий случай
+
+    @staticmethod
+    def _vote_nested_dict(values: list) -> Optional[dict]:
+        """
+        Голосование для вложенного dict: по каждому под-ключу независимо.
+        Если под-значение само dict — рекурсивно.
+        Скалярные значения среди dict-голосов игнорируются (с логированием).
+        Возвращает None, если после голосования не осталось ни одного ключа.
+        """
+        dicts: list = []
+        ignored = 0
+        for v in values:
+            if isinstance(v, dict):
+                dicts.append(v)
+            elif v is not None:
+                ignored += 1
+
+        if not dicts:
+            return None
+        if ignored:
+            logger.debug("_vote_nested_dict: проигнорировано %d не-dict значений", ignored)
+
+        all_sub_keys: set = set()
+        for d in dicts:
+            all_sub_keys.update(d.keys())
+
+        result: dict = {}
+        for sk in all_sub_keys:
+            sub_vals = [d.get(sk) for d in dicts]
+            if any(isinstance(sv, dict) for sv in sub_vals if sv is not None):
+                sub_voted = LlamaClient._vote_nested_dict(sub_vals)
+            else:
+                sub_voted = LlamaClient._vote_value(sub_vals)
+            if sub_voted is not None:
+                result[sk] = sub_voted
+
+        return result if result else None
+
+    @staticmethod
     def _vote_results(results: list, doc_type: str, file_name: str) -> dict:
         """
-        Сравнить N результатов и выбрать значения с большинством (>50%).
+        Сравнить N результатов и выбрать значения со строгим большинством (>50%).
         Для вложенных dict — голосование по каждому под-ключу.
+        Ключи без строгого большинства отбрасываются.
         """
+        base = {"docType": doc_type, "fileName": file_name}
+
         if not results:
-            return {"docType": doc_type, "fileName": file_name, "parseError": "Нет результатов"}
+            return {**base, "parseError": "Нет результатов"}
 
-        valid = [r for r in results if "parseError" not in r]
+        valid = [r for r in results if isinstance(r, dict) and "parseError" not in r]
         if not valid:
-            return {"docType": doc_type, "fileName": file_name, "parseError": "Все проходы завершились ошибкой"}
+            return {**base, "parseError": "Все проходы завершились ошибкой"}
 
-        # Если все одинаковые — просто берём первую
-        jsons = [json.dumps(r, sort_keys=True, ensure_ascii=False) for r in valid]
+        # Быстрый путь: все результаты идентичны
+        jsons = [json.dumps(r, sort_keys=True, ensure_ascii=False, default=str) for r in valid]
         if len(set(jsons)) == 1:
-            return valid[0]
+            return {**valid[0], **base}  # docType/fileName гарантированно наши
 
-        # Собираем все ключи из всех результатов
         all_keys: set = set()
         for r in valid:
             all_keys.update(r.keys())
@@ -824,81 +918,16 @@ class LlamaClient:
         for key in all_keys:
             values = [r.get(key) for r in valid]
             if any(isinstance(v, dict) for v in values if v is not None):
-                voted[key] = LlamaClient._vote_nested_dict(values)
+                out = LlamaClient._vote_nested_dict(values)
             else:
-                voted[key] = LlamaClient._vote_value(values)
+                out = LlamaClient._vote_value(values)
 
-        # Убираем None
-        voted = {k: v for k, v in voted.items() if v is not None}
-        voted["docType"] = doc_type
-        voted["fileName"] = file_name
-        return voted
+            if out is None:
+                logger.debug("_vote_results: ключ %r отброшен — нет строгого большинства", key)
+                continue
+            voted[key] = out
 
-    @staticmethod
-    def _vote_value(values: list) -> Any:
-        """
-        Голосование для скалярного значения.
-        Берёт значение с большинством (>50% от непустых).
-        Если majority нет — берёт самое частое (хотя бы 1 совпадение).
-        """
-        from collections import Counter
-
-        # Нормализуем: None → sentinel, unhashable → JSON-строка
-        def normalize(v):
-            if v is None:
-                return "__NONE__"
-            try:
-                hash(v)
-                return v
-            except TypeError:
-                return json.dumps(v, sort_keys=True, ensure_ascii=False)
-
-        # Только непустые значения участвуют в голосовании
-        non_none = [(v, normalize(v)) for v in values if v is not None]
-        if not non_none:
-            return None
-
-        counts = Counter(norm for _, norm in non_none)
-        best_norm, best_count = counts.most_common(1)[0]
-
-        # Порог: >50% от непустых
-        threshold = len(non_none) // 2 + 1
-
-        if best_count >= threshold:
-            for v, norm in non_none:
-                if norm == best_norm:
-                    return v
-            return None
-
-        # Нет majority — берём самое частое (top-1 из Counter)
-        for v, norm in non_none:
-            if norm == best_norm:
-                return v
-        return non_none[0][0]
-
-    @staticmethod
-    def _vote_nested_dict(values: list) -> dict:
-        """Голосование для вложенного dict: по каждому под-ключу."""
-        all_sub_keys: set = set()
-        dicts = []
-        for v in values:
-            if isinstance(v, dict):
-                dicts.append(v)
-                all_sub_keys.update(v.keys())
-            else:
-                dicts.append({})
-
-        if not dicts:
-            return None
-
-        result: dict = {}
-        for sk in all_sub_keys:
-            sub_vals = [d.get(sk) for d in dicts]
-            result[sk] = LlamaClient._vote_value(sub_vals)
-
-        # Убираем None
-        result = {k: v for k, v in result.items() if v is not None}
-        return result if result else None
+        return {**voted, **base}
 
 
 # ---------------------------------------------------------------------------
@@ -929,7 +958,7 @@ def _format_upd(file_name: str, r: dict) -> str:
         lines.append(f"💰 Итого с НДС: {r['totalWithVat']} руб.")
     elif r.get("totalWithoutVat") is not None:
         lines.append(f"💰 Итого без НДС: {r['totalWithoutVat']} руб. "
-                      f"(НДС: {r.get('totalVat', '—')})")
+                     f"(НДС: {r.get('totalVat', '—')})")
     if r.get("notes"):
         lines.append(f"📝 {r['notes']}")
     return "\n".join(lines)
@@ -1123,6 +1152,7 @@ def _format_unknown(file_name: str, r: dict) -> str:
         lines.append(f"📝 {r['notes']}")
     return "\n".join(lines)
 
+
 # ---------------------------------------------------------------------------
 # DocumentBot
 # ---------------------------------------------------------------------------
@@ -1197,7 +1227,7 @@ class DocumentBot(Bot):
         try:
             await self.doc_repo.connect()
         except Exception as e:
-            print(f"[DocumentBot] Ошибка подключения к PostgreSQL: {e}")
+            logger.info(f"[DocumentBot] Ошибка подключения к PostgreSQL: {e}")
 
     def stop(self) -> None:
         """Остановить фоновый опрос."""
@@ -1212,7 +1242,7 @@ class DocumentBot(Bot):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                print(f"[DocumentBot] Ошибка при опросе: {e}")
+                logger.info(f"[DocumentBot] Ошибка при опросе: {e}")
 
             try:
                 await asyncio.sleep(self.poll_interval)
@@ -1226,7 +1256,7 @@ class DocumentBot(Bot):
                 self.watch_dir + "/"
             )
         except Exception as e:
-            print(f"[DocumentBot] Не удалось получить список файлов: {e}")
+            logger.info(f"[DocumentBot] Не удалось получить список файлов: {e}")
             await self._notify(f"❌ Ошибка опроса папки: {e}")
             return
 
@@ -1255,10 +1285,10 @@ class DocumentBot(Bot):
             # Проверка типа источника
             source_type = _detect_source_type(file_name)
             if source_type == "unknown":
-                print(f"[DocumentBot] Пропускаю неизвестный тип: {file_name}")
+                logger.info(f"[DocumentBot] Пропускаю неизвестный тип: {file_name}")
                 continue
 
-            print(f"[DocumentBot] Найден новый файл: {file_name} ({source_type})")
+            logger.info(f"[DocumentBot] Найден новый файл: {file_name} ({source_type})")
             await self._process_and_notify(rel_path, file_name, source_type)
 
             # Отметить как обработанный
@@ -1284,7 +1314,7 @@ class DocumentBot(Bot):
             )
         except Exception as e:
             msg = f"❌ Ошибка скачивания {file_name}: {e}"
-            print(f"[DocumentBot] {msg}")
+            logger.info(f"[DocumentBot] {msg}")
             await self._notify(msg)
             return
 
@@ -1292,7 +1322,7 @@ class DocumentBot(Bot):
             result = await self.llama.process_document(file_name, file_data, source_type)
         except Exception as e:
             msg = f"❌ Ошибка обработки {file_name} через llama.cpp: {e}"
-            print(f"[DocumentBot] {msg}")
+            logger.info(f"[DocumentBot] {msg}")
             await self._notify(msg)
             return
 
@@ -1300,7 +1330,7 @@ class DocumentBot(Bot):
         try:
             await self.doc_repo.save_raw_document(result)
         except Exception as e:
-            print(f"[DocumentBot] Ошибка сохранения в БД: {e}")
+            logger.info(f"[DocumentBot] Ошибка сохранения в БД: {e}")
 
         # Сформировать сообщение для чата
         doc_type = result.get("docType", DOCUMENT_TYPE_UNKNOWN)
@@ -1338,13 +1368,13 @@ class DocumentBot(Bot):
     async def _notify(self, message: str) -> None:
         """Отправить сообщение в заданный чат."""
         if not self.chat_room:
-            print(f"[DocumentBot] (нет chat_room) {message}")
+            logger.info(f"[DocumentBot] (нет chat_room) {message}")
             return
 
         try:
             await self.send_to_nextcloud(self.chat_room, message, silent=True)
         except Exception as e:
-            print(f"[DocumentBot] Ошибка отправки в чат: {e}")
+            logger.info(f"[DocumentBot] Ошибка отправки в чат: {e}")
 
     async def _upload_json_to_nextcloud(self, file_name: str, data: dict) -> str | None:
         """
@@ -1369,10 +1399,10 @@ class DocumentBot(Bot):
 
             # Создание файла на Nextcloud с заданным именем
             self.nc_client.create_file(remote_dir, json_file_name, json_content)
-            print(f"[DocumentBot] JSON загружен: {remote_dir}/{json_file_name}")
+            logger.info(f"[DocumentBot] JSON загружен: {remote_dir}/{json_file_name}")
             return f"{remote_dir}/{json_file_name}"
         except Exception as e:
-            print(f"[DocumentBot] Ошибка загрузки JSON: {e}")
+            logger.info(f"[DocumentBot] Ошибка загрузки JSON: {e}")
             return None
 
     async def _send_result_with_attachment(self, file_name: str,
@@ -1385,7 +1415,7 @@ class DocumentBot(Bot):
         3. Прикрепить файл к чату через share-API.
         """
         if not self.chat_room:
-            print(f"[DocumentBot] (нет chat_room) {chat_msg}")
+            logger.info(f"[DocumentBot] (нет chat_room) {chat_msg}")
             return
 
         # Шаг 1 — загрузить JSON
@@ -1395,14 +1425,14 @@ class DocumentBot(Bot):
         try:
             await self.send_to_nextcloud(self.chat_room, chat_msg, silent=True)
         except Exception as e:
-            print(f"[DocumentBot] Ошибка отправки сообщения: {e}")
+            logger.info(f"[DocumentBot] Ошибка отправки сообщения: {e}")
 
         # Шаг 3 — прикрепить файл в чат
         if remote_path:
             try:
                 await self._share_file_in_chat(self.chat_room, remote_path, caption=chat_msg)
             except Exception as e:
-                print(f"[DocumentBot] Ошибка прикрепления файла: {e}")
+                logger.info(f"[DocumentBot] Ошибка прикрепления файла: {e}")
 
     async def _share_file_in_chat(self, room_token: str, file_path: str,
                                   caption: str = "") -> None:
@@ -1423,10 +1453,10 @@ class DocumentBot(Bot):
                 reference_id=reference_id,
                 silent=True,
             )
-            print(f"[DocumentBot] Файл прикреплён: {file_path}")
+            logger.info(f"[DocumentBot] Файл прикреплён: {file_path}")
         except Exception as e:
             # Fallback — попытаться через get_file_id + chat/share
-            print(f"[DocumentBot] files_sharing fallback: {e}")
+            logger.info(f"[DocumentBot] files_sharing fallback: {e}")
             try:
                 file_id = self.nc_client.get_file_id(file_path, encode_path=True)
                 await self._share_file_by_id(room_token, file_id)
@@ -1454,11 +1484,9 @@ class DocumentBot(Bot):
                 timeout=30.0,
             )
             if resp.status_code not in (200, 201):
-                print(f"[DocumentBot] chat/share fallback failed: {resp.status_code} {resp.text[:300]}")
+                logger.info(f"[DocumentBot] chat/share fallback failed: {resp.status_code} {resp.text[:300]}")
             else:
-                print(f"[DocumentBot] Файл прикреплён (id={file_id}) через fallback")
-
-
+                logger.info(f"[DocumentBot] Файл прикреплён (id={file_id}) через fallback")
 
     # -----------------------------------------------------------------------
     # Команды бота (для управления через чат)

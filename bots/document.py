@@ -684,11 +684,12 @@ class LlamaClient:
 
             # Очистка markdown-обёртки
             result_text = result_text.strip()
+            if len(result_text) > 0:
+                _results.append(result_text)
             if result_text.startswith("```"):
                 lines = result_text.split("\n")
                 lines = [l for l in lines if not l.strip().startswith("```")]
                 result_text = "\n".join(lines).strip()
-                _results.append(result_text)
 
             finally_result_rext = result_text
 

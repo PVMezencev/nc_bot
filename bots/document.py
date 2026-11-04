@@ -561,6 +561,9 @@ class LlamaClient:
             "response_format": {"type": "json_object"},
             "temperature": 0.0,
         }
+
+        print(f"[LlamaClient] DEBUG: client.post({url})\n\tpayload: {payload}")
+
         resp = await client.post(url, json=payload, timeout=360.0)
         resp.raise_for_status()
         data = resp.json()

@@ -37,6 +37,11 @@ from repo.postgres import DocumentRepository
 from utilites import pdf_to_jpg_base64
 
 
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+
 logger = logging.getLogger(__name__)
 
 BOT_NAME_DOCUMENT = "bot_document"
@@ -457,7 +462,7 @@ _SYSTEM_PROMT_TEMPLATE = """\
 {schema_json}
 
 Важно:
-- Даныне в документе должны быть строго перенесены в json, не придумывай данные и не добавляй ничего от себя.
+- Данные в документе должны быть строго перенесены в json, не придумывай данные и не добавляй ничего от себя.
 - Возвращай ТОЛЬКО валидный JSON, без markdown-обёртки ```json``` и без пояснений.
 - Если документ многостраничный — объедини данные со всех страниц.
 - Заполни все поля, которые удалось определить. Пропускай поля, которых нет в документе.
@@ -570,8 +575,6 @@ class LlamaClient:
             "response_format": {"type": "json_object"},
             "temperature": 0.0,
         }
-
-        logger.debug(f"[LlamaClient]: client.post({url})\n\tpayload: {payload}")
 
         resp = await client.post(url, json=payload, timeout=360.0)
         resp.raise_for_status()

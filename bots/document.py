@@ -644,43 +644,61 @@ class LlamaClient:
         system_prompt = build_system_prompt(doc_type)
         label = DOCUMENT_TYPE_LABELS.get(doc_type, doc_type)
 
-        content_parts = []
-        for b64 in images_base64:
+        """
+        Будем отправлять по одной странице, результат сохранять в промежуточный список, который будем использовать
+        в промпте для последующих страниц, чтоб модель не потеряла контекст документа.
+        """
+
+        # Список промежуточных результатов.
+        _results = []
+
+        # Итоговый текст.
+        finally_result_rext = ''
+
+        for idx in range(len(images_base64)):
+            b64 = images_base64[idx]
+            page = idx + 1
+            # Составная часть запроса.
+            content_parts = []
             content_parts.append({
                 "type": "image_url",
                 "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
             })
-        content_parts.append({
-            "type": "text",
-            "text": (
-                f"Файл: {file_name}\n"
-                f"Документ классифицирован как: {label}\n"
-                f"Извлеки структурированные данные согласно JSON-схеме для типа \"{doc_type}\".\n"
-                f"Возвращай ТОЛЬКО валидный JSON."
-            )
-        })
+            content_parts.append({
+                "type": "text",
+                "text": (
+                    f"Страница {page} файла {file_name}\n"
+                    f"Документ классифицирован как: {label}\n"
+                    f"С предыдущих страниц уже извлечен текст: {'\n'.join(_results)}\n - учитывай его тоже.\n" if len(_results) > 0 else ""
+                    f"Извлеки структурированные данные согласно JSON-схеме для типа \"{doc_type}\".\n"
+                    f"Возвращай ТОЛЬКО валидный JSON."
+                )
+            })
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": content_parts}
-        ]
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content_parts}
+            ]
 
-        result_text = await self._completion(client, messages)
+            result_text = await self._completion(client, messages)
 
-        # Очистка markdown-обёртки
-        result_text = result_text.strip()
-        if result_text.startswith("```"):
-            lines = result_text.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
-            result_text = "\n".join(lines).strip()
+            # Очистка markdown-обёртки
+            result_text = result_text.strip()
+            if result_text.startswith("```"):
+                lines = result_text.split("\n")
+                lines = [l for l in lines if not l.strip().startswith("```")]
+                result_text = "\n".join(lines).strip()
+                _results.append(result_text)
+
+            finally_result_rext = result_text
 
         try:
-            return json.loads(result_text)
+            return json.loads(finally_result_rext)
         except json.JSONDecodeError:
             return {
                 "docType": doc_type,
                 "fileName": file_name,
-                "rawResponse": result_text,
+                "rawResponse": finally_result_rext,
                 "parseError": "Не удалось распарсить JSON-ответ от модели"
             }
 
@@ -735,6 +753,9 @@ class LlamaClient:
             b64 = base64.b64encode(file_data).decode("ascii")
             images_base64 = [b64]
 
+        if not images_base64 or len(images_base64) == 0:
+            return {}
+
         async with httpx.AsyncClient() as client:
             # Шаг 0: OCR — получить текст из документа (отдельный llama.cpp с моделью распознавания)
             ocr_text = await self.ocr_recognize(client, images_base64, file_name)
@@ -749,7 +770,9 @@ class LlamaClient:
             if use_text:
                 doc_type = await self.classify_document_text(client, ocr_text, file_name)
             else:
-                doc_type = await self.classify_document(client, images_base64, file_name)
+                # Для определения типа документа достаточно отправить первую страницу.
+                first_page = images_base64[0]
+                doc_type = await self.classify_document(client,  [first_page], file_name)
             print(f"[LlamaClient] Определён тип: {doc_type} ({DOCUMENT_TYPE_LABELS.get(doc_type)})")
 
             # Шаг 2: извлечение данных — 5 проходов

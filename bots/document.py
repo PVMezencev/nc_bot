@@ -19,7 +19,6 @@ DocumentBot — мониторит папку на Nextcloud, обрабатыв
 
 import asyncio
 import base64
-import concurrent.futures
 import json
 import mimetypes
 import os
@@ -793,32 +792,28 @@ class LlamaClient:
                 doc_type = await self.classify_document(client, [first_page], file_name)
             logger.info(f"[LlamaClient] Определён тип: {doc_type} ({DOCUMENT_TYPE_LABELS.get(doc_type)})")
 
-            # Шаг 2: извлечение данных — steps_count проходов (параллельно)
-            loop = asyncio.get_running_loop()
+            # Шаг 2: извлечение данных — steps_count проходов (параллельно).
+            # Запускаем все проходы одновременно через asyncio.gather в ТЕКУЩЕМ
+            # event loop. Важно: НЕ используем блокирующие вызовы (ThreadPoolExecutor
+            # + as_completed из main thread) — они блокируют event loop и
+            # превращаются в deadlock (рабочие потоки ждут loop, а loop ждёт потоки),
+            # из-за чего перестаёт отвечать веб-интерфейс.
 
-            def _run_extract(attempt: int) -> dict:
-                """Один проход извлечения в отдельном потоке.
-
-                Корутина запускается в ТЕКУЩЕМ event loop через
-                run_coroutine_threadsafe, чтобы httpx.AsyncClient оставался
-                привязанным к своему loop.
-                """
+            async def _run_extract(attempt: int) -> dict:
+                """Один проход извлечения данных."""
                 try:
                     if use_text:
-                        coro = self.extract_document_data_text(client, ocr_text, file_name, doc_type)
+                        r = await self.extract_document_data_text(client, ocr_text, file_name, doc_type)
                     else:
-                        coro = self.extract_document_data(client, images_base64, file_name, doc_type)
-                    r = asyncio.run_coroutine_threadsafe(coro, loop).result()
+                        r = await self.extract_document_data(client, images_base64, file_name, doc_type)
                     logger.info(f"[LlamaClient] Проход {attempt + 1}/{self.steps_count}: {'OK' if 'parseError' not in r else 'ERROR'}")
                     return r
                 except Exception as e:
                     logger.info(f"[LlamaClient] Проход {attempt + 1}/{self.steps_count} ошибка: {e}")
                     return {"docType": doc_type, "fileName": file_name, "parseError": str(e)}
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=self.steps_count) as pool:
-                futures = [pool.submit(_run_extract, attempt) for attempt in range(self.steps_count)]
-                # Дожидаемся завершения всех запущенных потоков.
-                results = [f.result() for f in concurrent.futures.as_completed(futures)]
+            # Все проходы стартуют сразу и выполняются параллельно.
+            results = await asyncio.gather(*(_run_extract(attempt) for attempt in range(self.steps_count)))
 
             # Шаг 3: голосование — берём значения с большинством
             result = self._vote_results(results, doc_type, file_name)

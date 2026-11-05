@@ -81,9 +81,6 @@ async def handle_webhook(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
 
-    print(f'payload: {payload}')
-    print(f'data: {data}')
-
     # Инициализируем бота.
     if bot_name == BOT_NAME_GENERAL:
         bot = GeneralBot(config.NEXTCLOUD_URL, users_repo=mongo_users_repo)
@@ -109,9 +106,6 @@ async def handle_webhook(
         print(f"   Signature received: {x_nextcloud_talk_signature}")
         print(f"   Signature calculated: [скрыто]")
         raise HTTPException(status_code=401, detail="Invalid signature")
-
-    # Логирование входящего запроса
-    await bot.log_request(data)
 
     # Обработка сообщения
     response = await bot.process_message(data)

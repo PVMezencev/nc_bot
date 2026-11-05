@@ -463,7 +463,8 @@ _SYSTEM_PROMT_TEMPLATE = """\
 
 Важно:
 - Данные в документе должны быть строго перенесены в json, не придумывай данные и не добавляй ничего от себя.
-- Если найдены позиции с нулевой ценой или стоимостью - их не пропускай, такое может быть.
+- Если найдены позиции с нулевой ценой или стоимостью - их исключать нельзя, такое может быть. Нужно собрать все позиции.
+- Если найдены печать и подпись на документе - укажи это в описании.
 - Возвращай ТОЛЬКО валидный JSON, без markdown-обёртки ```json``` и без пояснений.
 - Если документ многостраничный — объедини данные со всех страниц.
 - Заполни все поля, которые удалось определить. Пропускай поля, которых нет в документе.
@@ -514,6 +515,19 @@ class LlamaClient:
         if not isinstance(steps_count, int) or steps_count < 3 or steps_count % 2 == 0:
             raise Exception("параметр steps_count должен быть ≥ 3 и не может быть чётным")
         self.steps_count = steps_count
+        # Статистика по токенам текущего документа: {"prompt": N, "completion": M}
+        # Сбрасывается в начале process_document.
+        self._token_stats: Dict[str, int] = {"prompt": 0, "completion": 0}
+
+    def _reset_token_stats(self) -> None:
+        self._token_stats = {"prompt": 0, "completion": 0}
+
+    def _add_usage(self, usage: Optional[dict]) -> None:
+        """Накопить usage из ответа модели в статистику токенов."""
+        if not usage:
+            return
+        self._token_stats["prompt"] += int(usage.get("prompt_tokens") or 0)
+        self._token_stats["completion"] += int(usage.get("completion_tokens") or 0)
 
     async def ocr_recognize(self, client: httpx.AsyncClient,
                             images_base64: List[str],
@@ -568,8 +582,12 @@ class LlamaClient:
         logger.info(f"[OCR] Итого: {len(full_text)} символов из {len(images_base64)} страниц")
         return full_text
 
-    async def _completion(self, client: httpx.AsyncClient, messages: list) -> str:
-        """Вызвать /v1/chat/completions на llama.cpp server."""
+    async def _completion(self, client: httpx.AsyncClient, messages: list) -> tuple:
+        """Вызвать /v1/chat/completions на llama.cpp server.
+
+        Возвращает (content, usage), где usage — dict из ответа модели
+        (prompt_tokens / completion_tokens / total_tokens) или None.
+        """
         url = f"{self.server_url}/v1/chat/completions"
         payload = {
             "messages": messages,
@@ -580,7 +598,10 @@ class LlamaClient:
         resp = await client.post(url, json=payload, timeout=360.0)
         resp.raise_for_status()
         data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        content = data["choices"][0]["message"]["content"]
+        usage = data.get("usage")
+        self._add_usage(usage)
+        return content, usage
 
     async def classify_document(self, client: httpx.AsyncClient,
                                 images_base64: List[str],
@@ -602,8 +623,8 @@ class LlamaClient:
             {"role": "user", "content": content_parts}
         ]
 
-        result = await self._completion(client, messages)
-        result = result.strip().strip("`").strip()
+        content, _ = await self._completion(client, messages)
+        result = content.strip().strip("`").strip()
 
         # Попробовать распарсить как JSON на случай, если модель вернула объект
         try:
@@ -634,8 +655,8 @@ class LlamaClient:
             )}
         ]
 
-        result = await self._completion(client, messages)
-        result = result.strip().strip("`").strip()
+        content, _ = await self._completion(client, messages)
+        result = content.strip().strip("`").strip()
 
         try:
             parsed = json.loads(result)
@@ -697,7 +718,7 @@ class LlamaClient:
                 {"role": "user", "content": content_parts}
             ]
 
-            result_text = await self._completion(client, messages)
+            result_text, _ = await self._completion(client, messages)
 
             # Очистка markdown-обёртки
             result_text = result_text.strip()
@@ -739,7 +760,7 @@ class LlamaClient:
             )}
         ]
 
-        result_text = await self._completion(client, messages)
+        result_text, _ = await self._completion(client, messages)
 
         # Очистка markdown-обёртки
         result_text = result_text.strip()
@@ -773,6 +794,9 @@ class LlamaClient:
 
         if not images_base64 or len(images_base64) == 0:
             return {}
+
+        # Сбрасываем статистику по токенам перед обработкой документа.
+        self._reset_token_stats()
 
         async with httpx.AsyncClient() as client:
             # Шаг 0: OCR — получить текст из документа (отдельный llama.cpp с моделью распознавания)
@@ -819,6 +843,12 @@ class LlamaClient:
             results = [r for r in raw_results if "parseError" not in r]
             # Шаг 3: голосование — берём значения с большинством
             result = self._vote_results(results, doc_type, file_name)
+
+            # Статистика по токенам (сколько отправлено / получено по всему документу).
+            result["tokenStats"] = {
+                "promptTokens": self._token_stats["prompt"],
+                "completionTokens": self._token_stats["completion"],
+            }
             return result
 
     @staticmethod
@@ -995,6 +1025,19 @@ class LlamaClient:
             voted[key] = out
 
         return {**voted, **base}
+
+    @staticmethod
+    def _token_stats_sentence(result: dict) -> str:
+        """Отдельное предложение со статистикой токенов нейросети по документу."""
+        stats = result.get("tokenStats")
+        if not stats:
+            return ""
+        prompt_tokens = stats.get("promptTokens", 0)
+        completion_tokens = stats.get("completionTokens", 0)
+        return (
+            f"\n🔢 Токены нейросети: отправлено {prompt_tokens}, "
+            f"получено {completion_tokens} (всего {prompt_tokens + completion_tokens})."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1411,12 +1454,13 @@ class DocumentBot(Bot):
         """Сформировать читаемое сообщение из результата обработки."""
 
         if "parseError" in result:
-            return (
+            msg = (
                 f"📄 *{file_name}*\n"
                 f"⚠️ Обработка завершена с предупреждением:\n"
                 f"{result.get('parseError', 'unknown error')}\n\n"
                 f"Сырой ответ:\n{result.get('rawResponse', 'N/A')[:500]}"
             )
+            return msg + LlamaClient._token_stats_sentence(result)
 
         formatters = {
             DOCUMENT_TYPE_UPD: _format_upd,
@@ -1430,7 +1474,7 @@ class DocumentBot(Bot):
         }
 
         formatter = formatters.get(doc_type, _format_unknown)
-        return formatter(file_name, result)
+        return formatter(file_name, result) + LlamaClient._token_stats_sentence(result)
 
     async def _notify(self, message: str) -> None:
         """Отправить сообщение в заданный чат."""

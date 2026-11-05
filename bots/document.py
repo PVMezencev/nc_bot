@@ -813,8 +813,9 @@ class LlamaClient:
                     return {"docType": doc_type, "fileName": file_name, "parseError": str(e)}
 
             # Все проходы стартуют сразу и выполняются параллельно.
-            results = await asyncio.gather(*(_run_extract(attempt) for attempt in range(self.steps_count)))
-
+            raw_results = await asyncio.gather(*(_run_extract(attempt) for attempt in range(self.steps_count)))
+            # явно отфильтровываем неудачные проходы — тогда голосование честное
+            results = [r for r in raw_results if "parseError" not in r]
             # Шаг 3: голосование — берём значения с большинством
             result = self._vote_results(results, doc_type, file_name)
             return result

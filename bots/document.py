@@ -832,6 +832,11 @@ class LlamaClient:
             return json.dumps(v, sort_keys=True, ensure_ascii=False, default=str)
 
     @staticmethod
+    def _normalize_list(v: Any) -> str:
+        """Каноническая строка для элемента списка (позиции)."""
+        return json.dumps(v, sort_keys=True, ensure_ascii=False, default=str)
+
+    @staticmethod
     def _vote_value(values: list) -> Any:
         """
         Голосование для скалярного значения.
@@ -839,10 +844,21 @@ class LlamaClient:
         Возвращает значение, набравшее строгое большинство (>50%) среди
         непустых голосов. Если строгого большинства нет (в т.ч. ничья
         при чётном числе голосов или все значения разные) — возвращает None.
+
+        Для списков (массивов, например items) используется НЕ точное
+        сравнение всего массива, а слияние уникальных элементов: позиция
+        сохраняется, если она встречается в >50% результатов. Иначе длинные
+        накопительные списки с последних страниц многостраничных документов
+        не могли набрать строгого большинства (модель слегка варьирует JSON)
+        и позиции с последних страниц терялись.
         """
         non_none = [v for v in values if v is not None]
         if not non_none:
             return None
+
+        # Массивы голосуем по элементам (см. выше).
+        if any(isinstance(v, list) for v in non_none):
+            return LlamaClient._vote_list(non_none)
 
         norms = [LlamaClient._normalize_for_vote(v) for v in non_none]
         counts = Counter(norms)
@@ -864,6 +880,41 @@ class LlamaClient:
             if norm == best_norm:
                 return v
         return None  # недостижимо, но на всякий случай
+
+    @staticmethod
+    def _vote_list(lists: list) -> Optional[list]:
+        """
+        Голосование для массива (напр. items).
+
+        Собирает все элементы из всех списков, канонизирует каждый элемент
+        (dict → JSON со sorted keys; скаляр → само значение) и сохраняет те,
+        что встречаются в строгом большинстве (>50%) результатов.
+        Возвращает None, если не осталось ни одного элемента.
+        """
+        non_empty = [lst for lst in lists if isinstance(lst, list) and len(lst) > 0]
+        if not non_empty:
+            return None
+
+        n = len(non_empty)
+        threshold = n // 2 + 1  # строго >50%
+
+        # canonical -> (original element, count)
+        seen: Dict[str, Any] = {}
+        for lst in non_empty:
+            present: set = set()
+            for el in lst:
+                key = LlamaClient._normalize_list(el)
+                if key in present:
+                    continue  # один элемент в одном списке — один голос
+                present.add(key)
+                rec = seen.get(key)
+                if rec is None:
+                    seen[key] = [el, 1]
+                else:
+                    rec[1] += 1
+
+        merged = [rec[0] for rec in seen.values() if rec[1] >= threshold]
+        return merged if merged else None
 
     @staticmethod
     def _vote_nested_dict(values: list) -> Optional[dict]:
@@ -895,6 +946,8 @@ class LlamaClient:
             sub_vals = [d.get(sk) for d in dicts]
             if any(isinstance(sv, dict) for sv in sub_vals if sv is not None):
                 sub_voted = LlamaClient._vote_nested_dict(sub_vals)
+            elif any(isinstance(sv, list) for sv in sub_vals if sv is not None):
+                sub_voted = LlamaClient._vote_list(sub_vals)
             else:
                 sub_voted = LlamaClient._vote_value(sub_vals)
             if sub_voted is not None:

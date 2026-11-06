@@ -463,11 +463,15 @@ _SYSTEM_PROMT_TEMPLATE = """\
 
 Важно:
 - Данные в документе должны быть строго перенесены в json, не придумывай данные и не добавляй ничего от себя.
+- Заполняй только те поля, которые реально есть в документе. Полей, которых нет в документе, НЕ заполняй — просто пропусти их (не ставь null и не выдумывай значения).
 - Если найдены позиции с нулевой ценой или стоимостью - их исключать нельзя, такое может быть. Нужно собрать все позиции.
-- Если найдены печать и подпись на документе - укажи это в описании.
+- Если найдены печать и подпись на документе - укажи это в поле `notes`.
+- Даты — строго в формате DD.MM.YYYY (например, 05.11.2026).
+- Числа (суммы, цены, количества) — без разделителей тысяч, десятичный разделитель — точка (например, 1250.5).
+- Поле `fullText` (для писем) — дословный текст письма без сокращений и пересказа; поле `summary` — краткое содержание 2–4 предложениями.
+- Отвечай на русском языке; собственные комментарии пиши по-русски, цитаты из документа сохраняй в оригинальном виде.
 - Возвращай ТОЛЬКО валидный JSON, без markdown-обёртки ```json``` и без пояснений.
 - Если документ многостраничный — объедини данные со всех страниц.
-- Заполни все поля, которые удалось определить. Пропускай поля, которых нет в документе.
 - Поле `docType` должно быть равно "{doc_type}".
 """.strip()
 
@@ -487,17 +491,16 @@ def build_system_prompt(doc_type: str = DOCUMENT_TYPE_UNKNOWN) -> str:
 
 # Первый проход — определение типа документа
 _CLASSIFY_PROMPT = """\
-Ты — классификатор документов. Определи тип приложенного документа.
+Определи тип приложенного документа.
 
 {types_description}
 
-Ответь ТОЛЬКО одним из значений docType:
-{type_values}
+Ответь ТОЛЬКО одним из значений docType: {type_values}
 
-Без пояснений, без markdown — только одно значение.
+Без пояснений, без markdown, без кавычек и без JSON — только одно значение.
 """.format(
     types_description=_DOCUMENT_TYPES_DESCRIPTION,
-    type_values=json.dumps(list(SCHEMA_MAP.keys()), ensure_ascii=False, indent=2),
+    type_values=", ".join(SCHEMA_MAP.keys()),
 )
 
 
@@ -562,7 +565,15 @@ class LlamaClient:
                 payload = {
                     "messages": [
                         {"role": "system",
-                         "content": "Ты — OCR-распознаватель. Извлекай текст с изображения дословно, без добавлений и комментариев."},
+                         "content": (
+                             "Ты — OCR-распознаватель. Извлекай текст с изображения дословно, "
+                             "без добавлений, комментариев и нумерации страниц.\n"
+                             "Читай текст сверху вниз, слева направо; для многостолбцовых layouts — столбец за столбцом.\n"
+                             "Сохраняй структуру таблиц: каждая строка таблицы — отдельной строкой, "
+                             "значения разделяй табуляцией или двумя пробелами.\n"
+                             "Если абзац или таблица обрывается на границе страницы — просто заверши текст; "
+                             "следующая страница продолжит его."
+                         )},
                         {"role": "user", "content": content_parts}
                     ],
                     "temperature": 0.0,
@@ -582,18 +593,23 @@ class LlamaClient:
         logger.info(f"[OCR] Итого: {len(full_text)} символов из {len(images_base64)} страниц")
         return full_text
 
-    async def _completion(self, client: httpx.AsyncClient, messages: list) -> tuple:
+    async def _completion(self, client: httpx.AsyncClient, messages: list,
+                          response_format: Optional[dict] = None) -> tuple:
         """Вызвать /v1/chat/completions на llama.cpp server.
 
         Возвращает (content, usage), где usage — dict из ответа модели
         (prompt_tokens / completion_tokens / total_tokens) или None.
+
+        response_format — опционально, например {"type": "json_object"} для
+        принудительного JSON-ответа; по умолчанию не задаётся.
         """
         url = f"{self.server_url}/v1/chat/completions"
         payload = {
             "messages": messages,
-            "response_format": {"type": "json_object"},
             "temperature": 0.0,
         }
+        if response_format:
+            payload["response_format"] = response_format
 
         resp = await client.post(url, json=payload, timeout=360.0)
         resp.raise_for_status()
@@ -674,72 +690,148 @@ class LlamaClient:
         return DOCUMENT_TYPE_UNKNOWN
 
     async def extract_document_data(self, client: httpx.AsyncClient,
-                                    images_base64: List[str],
-                                    file_name: str,
-                                    doc_type: str) -> dict:
-        """Извлечь структурированные данные согласно схеме для типа."""
+                                     images_base64: List[str],
+                                     file_name: str,
+                                     doc_type: str) -> dict:
+        """Извлечь структурированные данные согласно схеме для типа.
+
+        Стратегия для многостраничных документов:
+          1. Каждая страница обрабатывается отдельно; модель видит текущую
+             страницу + накопленный JSON с предыдущих страниц и возвращает
+             ОБНОВЛЁННЫЙ полный JSON (накопительный).
+          2. После обработки всех страниц — финальный merge-проход: модель
+             объединяет N промежуточных JSON в один итоговый (страховка от
+             потерь данных на границах страниц и от дрейфа накопительного
+             контекста).
+        """
         system_prompt = build_system_prompt(doc_type)
         label = DOCUMENT_TYPE_LABELS.get(doc_type, doc_type)
 
-        """
-        Будем отправлять по одной странице, результат сохранять в промежуточный список, который будем использовать
-        в промпте для последующих страниц, чтоб модель не потеряла контекст документа.
-        """
-
-        # Список промежуточных результатов.
-        _results = []
-
-        # Итоговый текст.
-        finally_result_rext = ''
+        # Список промежуточных результатов (JSON-строки с каждой страницы).
+        _results: List[str] = []
 
         for idx in range(len(images_base64)):
             b64 = images_base64[idx]
             page = idx + 1
+
             # Составная часть запроса.
-            content_parts = []
-            content_parts.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
-            })
-            content_parts.append({
-                "type": "text",
-                "text": (
-                    f"Страница {page} файла {file_name}\n"
-                    f"Документ классифицирован как: {label}\n"
-                    f"С предыдущих страниц уже извлечен текст: {'\n'.join(_results)}\n - учитывай его тоже.\n" if len(
-                        _results) > 0 else ""
-                                           f"Извлеки структурированные данные согласно JSON-схеме для типа \"{doc_type}\".\n"
-                                           f"Возвращай ТОЛЬКО валидный JSON."
+            content_parts = [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
+                },
+            ]
+
+            text_lines = [
+                f"Страница {page} из {len(images_base64)} файла {file_name}",
+                f"Документ классифицирован как: {label}",
+            ]
+            if _results:
+                text_lines.append(
+                    "С предыдущих страниц уже извлечён JSON — учитывай его и ДОПОЛНИ данными текущей страницы:\n"
+                    + "\n".join(_results)
                 )
-            })
+            text_lines.append(
+                f"Извлеки структурированные данные согласно JSON-схеме для типа \"{doc_type}\". "
+                f"Верни ОБНОВЛЁННЫЙ полный JSON (данные со всех страниц, включая текущую). "
+                f"Возвращай ТОЛЬКО валидный JSON."
+            )
+            content_parts.append({"type": "text", "text": "\n".join(text_lines)})
 
             messages = [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": content_parts}
             ]
 
-            result_text, _ = await self._completion(client, messages)
+            result_text, _ = await self._completion(
+                client, messages, response_format={"type": "json_object"}
+            )
 
-            # Очистка markdown-обёртки
-            result_text = result_text.strip()
-            if len(result_text) > 0:
+            # Очистка markdown-обёртки (на случай, если модель всё равно обёрнула)
+            result_text = self._strip_markdown(result_text)
+            if result_text:
                 _results.append(result_text)
-            if result_text.startswith("```"):
-                lines = result_text.split("\n")
-                lines = [l for l in lines if not l.strip().startswith("```")]
-                result_text = "\n".join(lines).strip()
 
-            finally_result_rext = result_text
+        if not _results:
+            return {
+                "docType": doc_type,
+                "fileName": file_name,
+                "parseError": "Модель не вернула ни одного результата по страницам",
+            }
 
+        # Единственная страница — merge-проход не нужен.
+        if len(_results) == 1:
+            return self._parse_extract_result(_results[0], doc_type, file_name)
+
+        # Финальный merge-проход: объединить N промежуточных JSON в один.
+        merged = await self._merge_page_results(client, system_prompt, _results, doc_type, file_name)
+        if merged is not None:
+            return merged
+        # Fallback: последний накопительный JSON (он содержит данные со всех страниц).
+        return self._parse_extract_result(_results[-1], doc_type, file_name)
+
+    @staticmethod
+    def _strip_markdown(text: str) -> str:
+        """Убрать markdown-обёртку ```json ... ``` из ответа модели."""
+        text = text.strip()
+        if text.startswith("```"):
+            lines = text.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            text = "\n".join(lines).strip()
+        return text
+
+    @staticmethod
+    def _parse_extract_result(result_text: str, doc_type: str, file_name: str) -> dict:
+        """Распарсить JSON-ответ модели; при ошибке — fallback-структура."""
         try:
-            return json.loads(finally_result_rext)
+            return json.loads(result_text)
         except json.JSONDecodeError:
             return {
                 "docType": doc_type,
                 "fileName": file_name,
-                "rawResponse": finally_result_rext,
-                "parseError": "Не удалось распарсить JSON-ответ от модели"
+                "rawResponse": result_text,
+                "parseError": "Не удалось распарсить JSON-ответ от модели",
             }
+
+    async def _merge_page_results(self, client: httpx.AsyncClient,
+                                  system_prompt: str,
+                                  page_results: List[str],
+                                  doc_type: str, file_name: str) -> Optional[dict]:
+        """Финальный проход: объединить N промежуточных JSON в один итоговый.
+
+        Возвращает dict при успехе, None — если merge не удался (тогда
+        вызывающий кодит fallback на последний накопительный JSON).
+        """
+        merged_text = "\n\n".join(page_results)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": (
+                f"Файл: {file_name}\n"
+                f"Ниже — промежуточные JSON-результаты извлечения данных по страницам "
+                f"многостраничного документа (тип: \"{doc_type}\").\n"
+                f"Объедини их в ОДИН итоговый JSON: сохрани все уникальные данные, "
+                f"суммируй/дополни позиции (items) без дублей, выбери согласованные "
+                f"значения для противоречивых полей.\n"
+                f"Возвращай ТОЛЬКО валидный JSON.\n\n"
+                f"{merged_text}"
+            )}
+        ]
+        try:
+            result_text, _ = await self._completion(
+                client, messages, response_format={"type": "json_object"}
+            )
+        except Exception as e:
+            logger.info(f"[LlamaClient] Merge-проход ошибка: {e}")
+            return None
+        result_text = self._strip_markdown(result_text)
+        try:
+            merged = json.loads(result_text)
+            if isinstance(merged, dict):
+                return merged
+        except json.JSONDecodeError:
+            pass
+        logger.info("[LlamaClient] Merge-проход не дал валидный JSON — использую fallback")
+        return None
 
     async def extract_document_data_text(self, client: httpx.AsyncClient,
                                          ocr_text: str,
@@ -760,24 +852,12 @@ class LlamaClient:
             )}
         ]
 
-        result_text, _ = await self._completion(client, messages)
+        result_text, _ = await self._completion(
+            client, messages, response_format={"type": "json_object"}
+        )
 
-        # Очистка markdown-обёртки
-        result_text = result_text.strip()
-        if result_text.startswith("```"):
-            lines = result_text.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
-            result_text = "\n".join(lines).strip()
-
-        try:
-            return json.loads(result_text)
-        except json.JSONDecodeError:
-            return {
-                "docType": doc_type,
-                "fileName": file_name,
-                "rawResponse": result_text,
-                "parseError": "Не удалось распарсить JSON-ответ от модели"
-            }
+        result_text = self._strip_markdown(result_text)
+        return self._parse_extract_result(result_text, doc_type, file_name)
 
     async def process_document(self, file_name: str, file_data: bytes,
                                source_type: str) -> dict:
@@ -843,6 +923,11 @@ class LlamaClient:
             results = [r for r in raw_results if "parseError" not in r]
             # Шаг 3: голосование — берём значения с большинством
             result = self._vote_results(results, doc_type, file_name)
+
+            # Для unknown-типа в режиме use_text подставляем OCR-текст в extractedText
+            # кодом (модель не должна копировать весь текст в JSON — это тратит токены).
+            if doc_type == DOCUMENT_TYPE_UNKNOWN and use_text:
+                result["extractedText"] = ocr_text
 
             # Статистика по токенам (сколько отправлено / получено по всему документу).
             result["tokenStats"] = {

@@ -515,8 +515,8 @@ class LlamaClient:
         self.server_url = server_url.rstrip("/")
         self.ocr_url = ocr_url.rstrip("/") if ocr_url else ""
         self._classify_prompt = _CLASSIFY_PROMPT
-        if not isinstance(steps_count, int) or steps_count < 3 or steps_count % 2 == 0:
-            raise Exception("параметр steps_count должен быть ≥ 3 и не может быть чётным")
+        if not isinstance(steps_count, int) or steps_count < 1 or steps_count % 2 == 0:
+            raise Exception("параметр steps_count должен быть нечётным (1, 3, 5, ...)")
         self.steps_count = steps_count
         # Статистика по токенам текущего документа: {"prompt": N, "completion": M}
         # Сбрасывается в начале process_document.
@@ -1381,7 +1381,7 @@ class DocumentBot(Bot):
             config.NEXTCLOUD_API_USER,
             config.NEXTCLOUD_API_PASSWORD,
         )
-        self.llama = LlamaClient(config.LLAMA_SERVER_URL, ocr_url=config.OCR_SERVICE_URL)
+        self.llama = LlamaClient(config.LLAMA_SERVER_URL, ocr_url=config.OCR_SERVICE_URL, steps_count=1)
 
         # Репозиторий документов (PostgreSQL)
         self.doc_repo = DocumentRepository()

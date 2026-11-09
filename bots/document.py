@@ -34,7 +34,7 @@ from collections import Counter
 from bots.common import Bot
 from nextcloud.nextcloudapi import NextcloudClient
 from repo.postgres import DocumentRepository
-from utilites import pdf_to_jpg_base64
+from utilites import pdf_to_jpg_base64, image_to_jpg_base64
 
 
 logging.basicConfig(
@@ -536,58 +536,32 @@ class LlamaClient:
 
     async def ocr_recognize(self, client: httpx.AsyncClient,
                             images_base64: List[str],
-                            file_name: str) -> str:
+                            file_name: str) -> tuple:
         """
-        Отправить страницы в OCR-llama по одной и собрать полный текст.
-        Возвращает '' при ошибке.
+        Отправить страницы в OCR-сервис (POST /recognize, multipart).
+        Возвращает (full_text, page_texts):
+          full_text  — весь текст для классификации,
+          page_texts — список текстов по страницам (для постраничного извлечения).
         """
         if not self.ocr_url:
-            return ""
+            return "", []
 
         all_texts = []
         for i, b64 in enumerate(images_base64):
             try:
-                url = f"{self.ocr_url}/v1/chat/completions"
-                content_parts = [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"}
-                    },
-                    {
-                        "type": "text",
-                        "text": (
-                            f"Файл: {file_name}, страница {i + 1} из {len(images_base64)}\n"
-                            f"Распознай ВЕСЬ текст на изображении дословно. "
-                            f"Сохраняй форматирование, таблицы, номера. "
-                            f"Возвращай только распознанный текст без комментариев."
-                        )
-                    }
-                ]
+                img_bytes = base64.b64decode(b64)
+                files = {"file": (f"page_{i + 1}.jpg", img_bytes, "image/jpeg")}
+                data = {"engine": "tesseract"}
 
-                payload = {
-                    "messages": [
-                        {"role": "system",
-                         "content": (
-                             "Ты — OCR-распознаватель. Извлекай текст с изображения дословно, "
-                             "без добавлений, комментариев и нумерации страниц.\n"
-                             "Читай текст сверху вниз, слева направо; для многостолбцовых layouts — столбец за столбцом.\n"
-                             "Сохраняй структуру таблиц: каждая строка таблицы — отдельной строкой, "
-                             "значения разделяй табуляцией или двумя пробелами.\n"
-                             "Если абзац или таблица обрывается на границе страницы — просто заверши текст; "
-                             "следующая страница продолжит его.\n"
-                             "Если страница пустая (чистый лист, случайный скан) — верни ПУСТУЮЮ строку, без текста и комментариев.\n"
-                             "Если страница перевёрнута (текст вверх ногами или боком) — распознай текст в правильном направлении, "
-                             "как будто страницу повернули. Не пиши 'страница перевёрнута' — просто верни распознанный текст."
-                         )},
-                        {"role": "user", "content": content_parts}
-                    ],
-                    "temperature": 0.0,
-                }
-
-                resp = await client.post(url, json=payload, timeout=120.0)
+                resp = await client.post(
+                    f"{self.ocr_url}/recognize",
+                    files=files,
+                    data=data,
+                    timeout=120.0,
+                )
                 resp.raise_for_status()
-                data = resp.json()
-                text = data["choices"][0]["message"]["content"].strip()
+                result = resp.json()
+                text = result.get("full_text", "").strip()
                 all_texts.append(text)
                 logger.info(f"[OCR] Страница {i + 1}/{len(images_base64)}: {len(text)} символов")
             except Exception as e:
@@ -596,7 +570,7 @@ class LlamaClient:
 
         full_text = "\n\n".join(t for t in all_texts if t)
         logger.info(f"[OCR] Итого: {len(full_text)} символов из {len(images_base64)} страниц")
-        return full_text
+        return full_text, all_texts
 
     async def _completion(self, client: httpx.AsyncClient, messages: list,
                           response_format: Optional[dict] = None) -> tuple:
@@ -856,7 +830,7 @@ class LlamaClient:
                                          ocr_text: str,
                                          file_name: str,
                                          doc_type: str) -> dict:
-        """Извлечь данные по OCR-тексту (без изображений)."""
+        """Извлечь данные по полному OCR-тексту (fallback, без постраничного разделения)."""
         system_prompt = build_system_prompt(doc_type)
         label = DOCUMENT_TYPE_LABELS.get(doc_type, doc_type)
 
@@ -867,7 +841,11 @@ class LlamaClient:
                 f"Документ классифицирован как: {label}\n"
                 f"Текст документа (OCR):\n{ocr_text}\n\n"
                 f"Извлеки структурированные данные согласно JSON-схеме для типа \"{doc_type}\".\n"
-                f"Возвращай ТОЛЬКО валидный JSON."
+                f"СТРОГИЕ ПРАВИЛА:\n"
+                f"- Каждая позиция товара/услуги — ОТДЕЛЬНЫЙ элемент массива `items`.\n"
+                f"- НЕ дублируй позиции. Не объединяй разные позиции в одну.\n"
+                f"- Позиции с нулевой ценой или стоимостью — ОБЯЗАТЕЛЬНО сохраняй.\n"
+                f"- Возвращай ТОЛЬКО валидный JSON."
             )}
         ]
 
@@ -877,6 +855,80 @@ class LlamaClient:
 
         result_text = self._strip_markdown(result_text)
         return self._parse_extract_result(result_text, doc_type, file_name)
+
+    async def extract_document_data_text_per_page(self, client: httpx.AsyncClient,
+                                                  page_texts: List[str],
+                                                  file_name: str,
+                                                  doc_type: str) -> dict:
+        """
+        Постраничное извлечение данных по OCR-тексту.
+
+        Каждая страница обрабатывается отдельно; модель видит текущую страницу
+        + накопленный JSON с предыдущих страниц и возвращает ОБНОВЛЁННЫЙ полный
+        JSON (накопительный). После всех страниц — merge-проход (если страниц > 1).
+        """
+        system_prompt = build_system_prompt(doc_type)
+        label = DOCUMENT_TYPE_LABELS.get(doc_type, doc_type)
+
+        _results: List[str] = []
+
+        for idx in range(len(page_texts)):
+            page_text = page_texts[idx]
+            if not page_text:
+                continue
+            page = idx + 1
+
+            content_parts = [
+                {"type": "text", "text": (
+                    f"Страница {page} из {len(page_texts)} файла {file_name}\n"
+                    f"Документ классифицирован как: {label}\n"
+                    f"Текст страницы (OCR):\n{page_text}\n\n"
+                    + (
+                        "С предыдущих страниц уже извлечён JSON — ВОССТАНОВИ его полностью и ДОПОЛНИ данными текущей страницы:\n"
+                        + "\n".join(_results)
+                        if _results else ""
+                    )
+                    + (
+                        f"Извлеки структурированные данные согласно JSON-схеме для типа \"{doc_type}\". "
+                        f"Верни ОБНОВЛЁННЫЙ полный JSON (данные со всех страниц, включая текущую).\n"
+                        f"СТРОГИЕ ПРАВИЛА:\n"
+                        f"- Каждая позиция товара/услуги на странице — ОТДЕЛЬНЫЙ элемент массива `items`.\n"
+                        f"- НЕ дублируй позиции: если позиция уже есть в накопленном JSON — не добавляй её повторно.\n"
+                        f"- Не объединяй разные позиции в одну. Позиции отличаются кодом курса (Б.x.x) или наименованием.\n"
+                        f"- Позиции с нулевой ценой или стоимостью — ОБЯЗАТЕЛЬНО сохраняй.\n"
+                        f"- Если страница не содержит позиций (шапка, итоги, подписи) — верни накопленный JSON без изменений.\n"
+                        f"- Возвращай ТОЛЬКО валидный JSON."
+                    )
+                )}
+            ]
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": content_parts}
+            ]
+
+            result_text, _ = await self._completion(
+                client, messages, response_format={"type": "json_object"}
+            )
+            result_text = self._strip_markdown(result_text)
+            if result_text:
+                _results.append(result_text)
+                logger.info(f"[Extract] Страница {page}/{len(page_texts)}: OK ({len(result_text)} символов)")
+
+        if not _results:
+            return {
+                "docType": doc_type,
+                "fileName": file_name,
+                "parseError": "Модель не вернула ни одного результата по страницам",
+            }
+
+        if len(_results) == 1:
+            return self._parse_extract_result(_results[0], doc_type, file_name)
+
+        merged = await self._merge_page_results(client, system_prompt, _results, doc_type, file_name)
+        if merged is not None:
+            return merged
+        return self._parse_extract_result(_results[-1], doc_type, file_name)
 
     async def process_document(self, file_name: str, file_data: bytes,
                                source_type: str) -> dict:
@@ -888,8 +940,13 @@ class LlamaClient:
         if source_type == "pdf":
             images_base64 = pdf_to_jpg_base64(file_data)
         else:
-            b64 = base64.b64encode(file_data).decode("ascii")
-            images_base64 = [b64]
+            rotated_b64 = image_to_jpg_base64(file_data)
+            if rotated_b64:
+                images_base64 = [rotated_b64]
+            else:
+                # Fallback: оригинальное изображение без поворота
+                b64 = base64.b64encode(file_data).decode("ascii")
+                images_base64 = [b64]
 
         if not images_base64 or len(images_base64) == 0:
             return {}
@@ -899,7 +956,7 @@ class LlamaClient:
 
         async with httpx.AsyncClient() as client:
             # Шаг 0: OCR — получить текст из документа (отдельный llama.cpp с моделью распознавания)
-            ocr_text = await self.ocr_recognize(client, images_base64, file_name)
+            ocr_text, page_texts = await self.ocr_recognize(client, images_base64, file_name)
             use_text = bool(ocr_text)  # если OCR дал текст — отправляем текст, иначе изображения
 
             if use_text:
@@ -926,7 +983,11 @@ class LlamaClient:
             async def _run_extract(attempt: int) -> dict:
                 """Один проход извлечения данных."""
                 try:
-                    if use_text:
+                    if use_text and len(page_texts) > 1:
+                        # Многостраничный документ — постраничное извлечение (точнее для позиций)
+                        r = await self.extract_document_data_text_per_page(client, page_texts, file_name, doc_type)
+                    elif use_text:
+                        # Одностраничный — полный текст сразу
                         r = await self.extract_document_data_text(client, ocr_text, file_name, doc_type)
                     else:
                         r = await self.extract_document_data(client, images_base64, file_name, doc_type)
@@ -1391,7 +1452,7 @@ class DocumentBot(Bot):
             config.NEXTCLOUD_API_USER,
             config.NEXTCLOUD_API_PASSWORD,
         )
-        self.llama = LlamaClient(config.LLAMA_SERVER_URL, ocr_url=config.OCR_SERVICE_URL, steps_count=1)
+        self.llama = LlamaClient(config.LLAMA_SERVER_URL, ocr_url=config.OCR_SERVICE_URL, steps_count=3)
 
         # Репозиторий документов (PostgreSQL)
         self.doc_repo = DocumentRepository()

@@ -49,3 +49,4 @@ asyncpg==0.32.0
 Jinja2==3.1.6
 Jinja2==3.1.6
 python-multipart==0.0.33
+pytesseract==0.3.13

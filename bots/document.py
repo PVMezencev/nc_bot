@@ -1452,7 +1452,7 @@ class DocumentBot(Bot):
             config.NEXTCLOUD_API_USER,
             config.NEXTCLOUD_API_PASSWORD,
         )
-        self.llama = LlamaClient(config.LLAMA_SERVER_URL, ocr_url=config.OCR_SERVICE_URL, steps_count=3)
+        self.llama = LlamaClient(config.LLAMA_SERVER_URL, ocr_url=config.OCR_SERVICE_URL, steps_count=1)
 
         # Репозиторий документов (PostgreSQL)
         self.doc_repo = DocumentRepository()

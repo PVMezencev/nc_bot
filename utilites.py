@@ -58,28 +58,50 @@ def _get_rotation_angle(img: Image.Image) -> float:
     return 0.0
 
 
+def _text_quality(img: Image.Image) -> int:
+    """
+    Быстрая оценка качества текста на изображении через tesseract.
+    Возвращает количество распознанных букв (больше = лучше).
+    """
+    try:
+        import pytesseract
+        np_arr = np.array(img.convert("L"))
+        _, thresh = cv2.threshold(np_arr, 127, 255, cv2.THRESH_BINARY)
+        text = pytesseract.image_to_string(thresh)
+        return sum(1 for ch in text if ch.isalpha())
+    except Exception:
+        return 0
+
+
 def auto_rotate_image(img: Image.Image) -> Image.Image:
     """
     Автоматически повернуть изображение в правильное положение.
 
-    Использует Tesseract OSD для определения ориентации текста.
-    Если OSD не смог определить — возвращает изображение без изменений.
+    1. Tesseract OSD для определения ориентации (90/180/270).
+    2. Если OSD вернул 0 — проверяем качество OCR; если текст плохо
+       распознаётся, пробуем поворот на 180° и сравниваем качество.
     """
     angle = _get_rotation_angle(img)
-    if angle == 0:
-        return img
+    if angle != 0:
+        logger.info(f"[rotation] Поворот на {angle}° (OSD)")
+        return img.rotate(-angle, expand=True)
 
-    logger.info(f"[rotation] Поворот на {angle}°")
-    # PIL.rotate поворачивает против часовой стрелки.
-    # Tesseract возвращает угол ориентации текста (по часовой),
-    # поэтому поворачиваем на -angle (эквивалентно 360 - angle).
-    return img.rotate(-angle, expand=True)
+    # OSD не определил поворот — проверяем, не перевернута ли страница на 180°.
+    original_quality = _text_quality(img)
+    rotated_180 = img.rotate(180, expand=True)
+    rotated_quality = _text_quality(rotated_180)
+
+    if rotated_quality > original_quality * 1.5:
+        logger.info(f"[rotation] Поворот на 180° (качество: {original_quality} → {rotated_quality})")
+        return rotated_180
+
+    return img
 
 
 def _encode_jpeg_base64(img: Image.Image) -> str:
     """Кодирует PIL-изображение в base64 JPEG."""
     buffer = BytesIO()
-    img.save(buffer, format="JPEG", quality=95, optimize=True)
+    img.save(buffer, format="JPEG", quality=95, optimize=False)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 

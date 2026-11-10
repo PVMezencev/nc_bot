@@ -890,6 +890,80 @@ class LlamaClient:
         logger.info("[LlamaClient] Merge-проход не дал валидный JSON — использую fallback")
         return None
 
+    async def _ocr_page_llm_refine(self, client: httpx.AsyncClient,
+                                    b64: str,
+                                    ocr_page_text: str) -> Optional[str]:
+        """LLM-распознавание одной страницы поверх OCR-текста.
+
+        Используется для краевых страниц многостраничных документов (первая и
+        последняя) и для одностраничных документов, когда основной пайплайн
+        работает через OCR. Модель видит изображение + черновик от OCR и
+        возвращает исправленный полный текст страницы.
+
+        Возвращает исправленный текст или None при ошибке/пустом ответе.
+        """
+        messages = [
+            {"role": "system", "content": (
+                "Ты — помощник по распознаванию текста со сканов документов. "
+                "Тебе дают изображение страницы и предварительный текст, полученный OCR (tesseract). "
+                "OCR часто ошибается в цифрах, датах, ИНН/КПП, названиях организаций и т.п."
+            )},
+            {"role": "user", "content": [
+                {"type": "image_url",
+                 "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                {"type": "text", "text": (
+                    f"Предварительный текст страницы (OCR):\n{ocr_page_text or '(пусто)'}\n\n"
+                    f"Внимательно посмотри на изображение и исправь ошибки OCR. "
+                    f"Верни ПОЛНЫЙ исправленный текст страницы дословно, как он написан в документе: "
+                    f"сохрани структуру (строки, таблицы — по строкам), не сокращай и не пересказывай. "
+                    f"Если страница пустая — ответь одной строкой \"ПУСТО\". "
+                    f"Никаких пояснений, без markdown-обёртки."
+                )}
+            ]}
+        ]
+        try:
+            content, _ = await self._completion(client, messages)
+            text = self._strip_markdown(content).strip()
+            if not text or text.upper() == "ПУСТО":
+                return None
+            return text
+        except Exception as e:
+            logger.info(f"[OCR+LLM] Ошибка LLM-распознавания страницы: {e}")
+            return None
+
+    async def refine_pages_with_llm(self, client: httpx.AsyncClient,
+                                    images_base64: List[str],
+                                    page_texts: List[str]) -> tuple:
+        """Улучшить OCR-тексты краевых страниц через LLM (image-based проход).
+
+        Стратегия:
+          • Одностраничный документ — LLM распознаёт единственную страницу.
+          • Многостраничный — LLM распознаёт только первую и последнюю страницы
+            (на них обычно шапка с реквизитами, итоги, подписи — самые важные
+            для извлечения данные), остальные остаются по OCR.
+
+        Запросы идут последовательно, чтобы не перегружать llama.cpp.
+        Возвращает обновлённые (full_text, page_texts).
+        """
+        n = len(images_base64)
+        if n == 0:
+            return "", []
+
+        refine_indices = [0] if n == 1 else {0, n - 1}
+        for idx in sorted(refine_indices):
+            b64 = images_base64[idx]
+            ocr_text = page_texts[idx] if idx < len(page_texts) else ""
+            logger.info(f"[OCR+LLM] Улучшаю страницу {idx + 1}/{n} через LLM")
+            refined = await self._ocr_page_llm_refine(client, b64, ocr_text)
+            if refined:
+                page_texts[idx] = refined
+                logger.info(f"[OCR+LLM] Страница {idx + 1}: исправлено ({len(refined)} символов)")
+            else:
+                logger.info(f"[OCR+LLM] Страница {idx + 1}: LLM не дала текста — оставляю OCR")
+
+        full_text = "\n\n".join(t for t in page_texts if t)
+        return full_text, page_texts
+
     async def extract_document_data_text(self, client: httpx.AsyncClient,
                                          ocr_text: str,
                                          file_name: str,
@@ -1021,6 +1095,15 @@ class LlamaClient:
             # Шаг 0: OCR — получить текст из документа (отдельный llama.cpp с моделью распознавания)
             ocr_text, page_texts = await self.ocr_recognize(client, images_base64, file_name)
             use_text = bool(ocr_text)  # если OCR дал текст — отправляем текст, иначе изображения
+
+            if use_text:
+                # Улучшение качества: краевые страницы (первая/последняя для
+                # многостраничных, единственная для одностраничных) дополнительно
+                # распознаются через LLM по изображению поверх OCR-текста.
+                ocr_text, page_texts = await self.refine_pages_with_llm(
+                    client, images_base64, page_texts
+                )
+                use_text = bool(ocr_text)
 
             if use_text:
                 logger.debug(f"[LlamaClient] Используем OCR-текст:\n{ocr_text}")

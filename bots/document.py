@@ -958,6 +958,7 @@ class LlamaClient:
             use_text = bool(ocr_text)  # если OCR дал текст — отправляем текст, иначе изображения
 
             if use_text:
+                logger.debug(f"[LlamaClient] Используем OCR-текст:\n{ocr_text}")
                 logger.info(f"[LlamaClient] Используем OCR-текст ({len(ocr_text)} символов) вместо изображений")
             else:
                 logger.info(f"[LlamaClient] OCR недоступен, используем изображения")

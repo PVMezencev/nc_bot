@@ -34,7 +34,9 @@ from collections import Counter
 from bots.common import Bot
 from nextcloud.nextcloudapi import NextcloudClient
 from repo.postgres import DocumentRepository
-from utilites import pdf_to_jpg_base64, image_to_jpg_base64, pdf_to_jpg_base64_iter
+from utilites import pdf_to_jpg_base64, image_to_jpg_base64, pdf_to_jpg_base64_iter, _encode_jpeg_base64
+from PIL import Image
+from io import BytesIO
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -597,6 +599,69 @@ class LlamaClient:
         self._add_usage(usage)
         return content, usage
 
+    async def determine_orientation(self, client: httpx.AsyncClient,
+                                    b64: str) -> int:
+        """Спросить LLM, на какой угол нужно повернуть страницу (0/90/180/270).
+
+        Возвращает угол в градусах (на который нужно повернуть изображение
+        ПРОТИВ часовой стрелки, чтобы текст читался нормально).
+        При ошибке — 0 (не поворачиваем).
+        """
+        messages = [
+            {"role": "system", "content": (
+                "Ты определяешь ориентацию скана страницы документа. "
+                "Внимательно посмотри на изображение и определи, в каком направлении "
+                "расположен текст. Выбери ОДИН вариант:\n"
+                "A — текст читается нормально: строки горизонтальны, слева направо, сверху вниз (поворот 0°);\n"
+                "B — текст повёрнут на 90° по часовой стрелке: чтобы прочитать, нужно повернуть изображение на 90° против часовой стрелки;\n"
+                "C — текст перевёрнут на 180°: строки горизонтальны, но читаются снизу вверх (поворот 180°);\n"
+                "D — текст повёрнут на 270° по часовой стрелке (90° против часовой): чтобы прочитать, нужно повернуть изображение на 270° против часовой стрелки.\n"
+                "Отвечай ТОЛЬКО одной буквой: A, B, C или D. Без пояснений."
+            )},
+            {"role": "user", "content": [
+                {"type": "image_url",
+                 "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                {"type": "text", "text": "В каком направлении расположен текст на этом изображении? A, B, C или D?"}
+            ]}
+        ]
+        letter_to_angle = {"A": 0, "B": 90, "C": 180, "D": 270}
+        try:
+            content, _ = await self._completion(client, messages)
+            for ch in content.strip().upper():
+                if ch in letter_to_angle:
+                    return letter_to_angle[ch]
+            # запасной вариант: модель всё-таки ответила числом
+            for token in content.strip().replace(',', ' ').split():
+                if token in ("0", "90", "180", "270"):
+                    return int(token)
+            logger.info(f"[orientation] Не удалось разобрать ответ: {content!r}")
+        except Exception as e:
+            logger.info(f"[orientation] Ошибка определения ориентации: {e}")
+        return 0
+
+    async def rotate_images_if_needed(self, client: httpx.AsyncClient,
+                                      images_base64: List[str]) -> List[str]:
+        """Для каждой страницы определить ориентацию через LLM и повернуть.
+
+        Используется только когда OCR-сервис недоступен (image-based пайплайн).
+        Запросы идут последовательно, чтобы не перегружать llama.cpp.
+        """
+        rotated = []
+        for i, b64 in enumerate(images_base64):
+            angle = await self.determine_orientation(client, b64)
+            if angle == 0:
+                rotated.append(b64)
+                continue
+            try:
+                img = Image.open(BytesIO(base64.b64decode(b64)))
+                img = img.rotate(-angle, expand=True)  # OSD-угол: поворот против ЧС
+                rotated.append(_encode_jpeg_base64(img))
+                logger.info(f"[orientation] Страница {i + 1}: повернута на {angle}°")
+            except Exception as e:
+                logger.info(f"[orientation] Страница {i + 1}: не удалось повернуть: {e}")
+                rotated.append(b64)
+        return rotated
+
     async def classify_document(self, client: httpx.AsyncClient,
                                 images_base64: List[str],
                                 file_name: str) -> str:
@@ -962,6 +1027,8 @@ class LlamaClient:
                 logger.info(f"[LlamaClient] Используем OCR-текст ({len(ocr_text)} символов) вместо изображений")
             else:
                 logger.info(f"[LlamaClient] OCR недоступен, используем изображения")
+                # OCR-сервис не повернул страницы — определяем ориентацию через LLM
+                images_base64 = await self.rotate_images_if_needed(client, images_base64)
 
             # Шаг 1: классификация (один раз)
             if use_text:

@@ -5,8 +5,6 @@ from datetime import datetime
 import base64
 from io import BytesIO
 
-import cv2
-import numpy as np
 from PIL import Image, ImageOps
 from pdf2image import convert_from_bytes
 
@@ -29,62 +27,6 @@ def unzip_archive(zip_file_path, to_dir):
         zip_ref.extractall(to_dir)
 
 
-def _get_rotation_angle(img: Image.Image) -> float:
-    try:
-        import pytesseract
-        # Уменьшаем для скорости OSD — на точность не влияет
-        small = img.copy()
-        small.thumbnail((1000, 1000), Image.LANCZOS)
-        np_arr = np.array(small.convert("L"))
-        _, thresh = cv2.threshold(np_arr, 127, 255, cv2.THRESH_BINARY)
-        img_info = pytesseract.image_to_osd(thresh)
-        for line in img_info.split('\n'):
-            if ':' in line:
-                key, _, val = line.partition(':')
-                if key.strip().lower() == 'image rotation':
-                    return float(val.strip())
-    except Exception as e:
-        logger.debug(f"[rotation] OSD не определил ориентацию: {e}")
-    return 0.0
-
-
-def _text_quality(img: Image.Image) -> float:
-    try:
-        import pytesseract
-        np_arr = np.array(img.convert("L"))
-        _, thresh = cv2.threshold(np_arr, 127, 255, cv2.THRESH_BINARY)
-        data = pytesseract.image_to_data(thresh, output_type=pytesseract.Output.DICT)
-        confs = [int(c) for c in data["conf"] if int(c) > 0]
-        return float(np.mean(confs)) if confs else 0.0
-    except Exception:
-        return 0.0
-
-
-def auto_rotate_image(img: Image.Image) -> Image.Image:
-    """
-    Автоматически повернуть изображение в правильное положение.
-
-    1. Tesseract OSD для определения ориентации (90/180/270).
-    2. Если OSD вернул 0 — проверяем качество OCR; если текст плохо
-       распознаётся, пробуем поворот на 180° и сравниваем качество.
-    """
-    angle = _get_rotation_angle(img)
-    if angle != 0:
-        logger.info(f"[rotation] Поворот на {angle}° (OSD)")
-        return img.rotate(-angle, expand=True)
-
-    # OSD не определил поворот — проверяем, не перевернута ли страница на 180°.
-    original_quality = _text_quality(img)
-    rotated_180 = img.rotate(180, expand=True)
-    rotated_quality = _text_quality(rotated_180)
-
-    if rotated_quality > original_quality * 1.5:
-        logger.info(f"[rotation] Поворот на 180° (качество: {original_quality} → {rotated_quality})")
-        return rotated_180
-
-    return img
-
-
 def _encode_jpeg_base64(img: Image.Image) -> str:
     """Кодирует PIL-изображение в base64 JPEG."""
     buffer = BytesIO()
@@ -96,7 +38,8 @@ def pdf_to_jpg_base64(pdf_bytes) -> list:
     """
     Конвертирует PDF в список JPEG (base64) — по одному на страницу.
     Без масштабирования — сохраняем исходное разрешение для точного распознавания.
-    Каждая страница автоматически поворачивается в правильное положение.
+    Поворот страниц НЕ делается здесь (tesseract OSD не работает на сканах) —
+    ориентацию определяет LLM/OCR-сервис в пайплайне LlamaClient.
     Возвращает List[str] (список base64-строк).
     """
     images = convert_from_bytes(pdf_bytes, dpi=200, grayscale=True, poppler_path='/usr/bin')
@@ -104,22 +47,22 @@ def pdf_to_jpg_base64(pdf_bytes) -> list:
     result = []
     for img in images:
         img = ImageOps.exif_transpose(img)
-        img = auto_rotate_image(img)
         result.append(_encode_jpeg_base64(img))
 
     return result
+
 
 def pdf_to_jpg_base64_iter(pdf_bytes, dpi=200):
     images = convert_from_bytes(pdf_bytes, dpi=dpi, grayscale=True, poppler_path='/usr/bin')
     for img in images:
         img = ImageOps.exif_transpose(img)
-        img = auto_rotate_image(img)
         yield _encode_jpeg_base64(img)
 
 
 def image_to_jpg_base64(image_bytes: bytes) -> str:
     """
-    Конвертирует изображение (bytes) в JPEG base64 с автоповоротом.
+    Конвертирует изображение (bytes) в JPEG base64.
+    Поворот НЕ делается здесь — ориентацию определяет LLM/OCR-сервис.
     Возвращает base64-строку, или '' при ошибке.
     """
     try:
@@ -128,9 +71,7 @@ def image_to_jpg_base64(image_bytes: bytes) -> str:
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
         img = ImageOps.exif_transpose(img)
-        img = auto_rotate_image(img)
         return _encode_jpeg_base64(img)
     except Exception as e:
-        logger.warning(f"[rotation] Не удалось обработать изображение: {e}")
+        logger.warning(f"[image] Не удалось обработать изображение: {e}")
         return ""
-

@@ -981,11 +981,8 @@ class LlamaClient:
             async def _run_extract(attempt: int) -> dict:
                 """Один проход извлечения данных."""
                 try:
-                    if use_text and len(page_texts) > 1:
-                        # Многостраничный документ — постраничное извлечение (точнее для позиций)
-                        r = await self.extract_document_data_text_per_page(client, page_texts, file_name, doc_type)
-                    elif use_text:
-                        # Одностраничный — полный текст сразу
+                    if use_text:
+                        # Одностраничный и многостраничный — полный текст сразу
                         r = await self.extract_document_data_text(client, ocr_text, file_name, doc_type)
                     else:
                         r = await self.extract_document_data(client, images_base64, file_name, doc_type)

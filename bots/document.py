@@ -936,7 +936,7 @@ class LlamaClient:
         """
         # Конвертируем в список изображений base64 (фолбэк, если OCR не работает)
         if source_type == "pdf":
-            images_base64 = pdf_to_jpg_base64_iter(file_data)
+            images_base64 = list(pdf_to_jpg_base64_iter(file_data))
         else:
             rotated_b64 = image_to_jpg_base64(file_data)
             if rotated_b64:

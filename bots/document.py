@@ -34,8 +34,7 @@ from collections import Counter
 from bots.common import Bot
 from nextcloud.nextcloudapi import NextcloudClient
 from repo.postgres import DocumentRepository
-from utilites import pdf_to_jpg_base64, image_to_jpg_base64
-
+from utilites import pdf_to_jpg_base64, image_to_jpg_base64, pdf_to_jpg_base64_iter
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -843,7 +842,6 @@ class LlamaClient:
                 f"Извлеки структурированные данные согласно JSON-схеме для типа \"{doc_type}\".\n"
                 f"СТРОГИЕ ПРАВИЛА:\n"
                 f"- Каждая позиция товара/услуги — ОТДЕЛЬНЫЙ элемент массива `items`.\n"
-                f"- НЕ дублируй позиции. Не объединяй разные позиции в одну.\n"
                 f"- Позиции с нулевой ценой или стоимостью — ОБЯЗАТЕЛЬНО сохраняй.\n"
                 f"- Возвращай ТОЛЬКО валидный JSON."
             )}
@@ -893,7 +891,7 @@ class LlamaClient:
                         f"Верни ОБНОВЛЁННЫЙ полный JSON (данные со всех страниц, включая текущую).\n"
                         f"СТРОГИЕ ПРАВИЛА:\n"
                         f"- Каждая позиция товара/услуги на странице — ОТДЕЛЬНЫЙ элемент массива `items`.\n"
-                        f"- НЕ дублируй позиции: если позиция уже есть в накопленном JSON — не добавляй её повторно.\n"
+                        f"- Если позиция уже есть в накопленном JSON — добавляй её повторно - это не дубль, такое может быть.\n"
                         f"- Не объединяй разные позиции в одну. Позиции отличаются кодом курса (Б.x.x) или наименованием.\n"
                         f"- Позиции с нулевой ценой или стоимостью — ОБЯЗАТЕЛЬНО сохраняй.\n"
                         f"- Если страница не содержит позиций (шапка, итоги, подписи) — верни накопленный JSON без изменений.\n"
@@ -938,7 +936,7 @@ class LlamaClient:
         """
         # Конвертируем в список изображений base64 (фолбэк, если OCR не работает)
         if source_type == "pdf":
-            images_base64 = pdf_to_jpg_base64(file_data)
+            images_base64 = pdf_to_jpg_base64_iter(file_data)
         else:
             rotated_b64 = image_to_jpg_base64(file_data)
             if rotated_b64:

@@ -7,7 +7,7 @@ from io import BytesIO
 
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 from pdf2image import convert_from_bytes
 
 logger = logging.getLogger(__name__)
@@ -30,47 +30,34 @@ def unzip_archive(zip_file_path, to_dir):
 
 
 def _get_rotation_angle(img: Image.Image) -> float:
-    """
-    Определить угол поворота страницы через Tesseract OSD.
-
-    Возвращает угол в градусах (0, 90, 180, 270), на который нужно повернуть
-    изображение против часовой стрелки, чтобы текст стал читаемым.
-    Возвращает 0.0 если OSD не смог определить ориентацию.
-    """
     try:
         import pytesseract
-
-        # OSD работает на ч/б изображении
-        np_arr = np.array(img.convert("L"))
+        # Уменьшаем для скорости OSD — на точность не влияет
+        small = img.copy()
+        small.thumbnail((1000, 1000), Image.LANCZOS)
+        np_arr = np.array(small.convert("L"))
         _, thresh = cv2.threshold(np_arr, 127, 255, cv2.THRESH_BINARY)
-
         img_info = pytesseract.image_to_osd(thresh)
-
         for line in img_info.split('\n'):
-            if ':' not in line:
-                continue
-            key, _, val = line.partition(':')
-            if key.strip().lower() == 'image rotation':
-                return float(val.strip())
+            if ':' in line:
+                key, _, val = line.partition(':')
+                if key.strip().lower() == 'image rotation':
+                    return float(val.strip())
     except Exception as e:
         logger.debug(f"[rotation] OSD не определил ориентацию: {e}")
-
     return 0.0
 
 
-def _text_quality(img: Image.Image) -> int:
-    """
-    Быстрая оценка качества текста на изображении через tesseract.
-    Возвращает количество распознанных букв (больше = лучше).
-    """
+def _text_quality(img: Image.Image) -> float:
     try:
         import pytesseract
         np_arr = np.array(img.convert("L"))
         _, thresh = cv2.threshold(np_arr, 127, 255, cv2.THRESH_BINARY)
-        text = pytesseract.image_to_string(thresh)
-        return sum(1 for ch in text if ch.isalpha())
+        data = pytesseract.image_to_data(thresh, output_type=pytesseract.Output.DICT)
+        confs = [int(c) for c in data["conf"] if int(c) > 0]
+        return float(np.mean(confs)) if confs else 0.0
     except Exception:
-        return 0
+        return 0.0
 
 
 def auto_rotate_image(img: Image.Image) -> Image.Image:
@@ -101,7 +88,7 @@ def auto_rotate_image(img: Image.Image) -> Image.Image:
 def _encode_jpeg_base64(img: Image.Image) -> str:
     """Кодирует PIL-изображение в base64 JPEG."""
     buffer = BytesIO()
-    img.save(buffer, format="JPEG", quality=95, optimize=False)
+    img.save(buffer, format="JPEG", quality=88, optimize=True, subsampling=0)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
@@ -112,16 +99,22 @@ def pdf_to_jpg_base64(pdf_bytes) -> list:
     Каждая страница автоматически поворачивается в правильное положение.
     Возвращает List[str] (список base64-строк).
     """
-    images = convert_from_bytes(pdf_bytes, poppler_path='/usr/bin')
-    if not images:
-        return []
+    images = convert_from_bytes(pdf_bytes, dpi=200, grayscale=True, poppler_path='/usr/bin')
 
     result = []
     for img in images:
+        img = ImageOps.exif_transpose(img)
         img = auto_rotate_image(img)
         result.append(_encode_jpeg_base64(img))
 
     return result
+
+def pdf_to_jpg_base64_iter(pdf_bytes, dpi=200):
+    images = convert_from_bytes(pdf_bytes, dpi=dpi, grayscale=True, poppler_path='/usr/bin')
+    for img in images:
+        img = ImageOps.exif_transpose(img)
+        img = auto_rotate_image(img)
+        yield _encode_jpeg_base64(img)
 
 
 def image_to_jpg_base64(image_bytes: bytes) -> str:
@@ -134,6 +127,7 @@ def image_to_jpg_base64(image_bytes: bytes) -> str:
         # Конвертируем RGBA/P в RGB для корректного сохранения в JPEG
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
+        img = ImageOps.exif_transpose(img)
         img = auto_rotate_image(img)
         return _encode_jpeg_base64(img)
     except Exception as e:

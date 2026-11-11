@@ -517,6 +517,9 @@ class LlamaClient:
     def __init__(self, server_url: str, ocr_url: str = "", steps_count=3):
         self.server_url = server_url.rstrip("/")
         self.ocr_url = ocr_url.rstrip("/") if ocr_url else ""
+        # Репозиторий документов (PostgreSQL) — для поиска контрагентов по ИНН/КПП.
+        # Подключается через set_repo() после создания DocumentRepository.
+        self._repo: Optional["DocumentRepository"] = None
         self._classify_prompt = _CLASSIFY_PROMPT
         if not isinstance(steps_count, int) or steps_count < 1 or steps_count % 2 == 0:
             raise Exception("параметр steps_count должен быть нечётным (1, 3, 5, ...)")
@@ -527,6 +530,71 @@ class LlamaClient:
 
     def _reset_token_stats(self) -> None:
         self._token_stats = {"prompt": 0, "completion": 0}
+
+    def set_repo(self, repo: "DocumentRepository") -> None:
+        """Привязать репозиторий БД для поиска контрагентов по ИНН/КПП."""
+        self._repo = repo
+
+    @staticmethod
+    def _clean_inn_kpp(v: Any) -> Optional[str]:
+        """ИНН/КПП — чистые цифры без пробелов и тире."""
+        if v is None:
+            return None
+        s = str(v).strip()
+        if not s:
+            return None
+        s = "".join(c for c in s if c.isdigit())
+        return s or None
+
+    async def find_counterparty(self, inn: Any, kpp: Any) -> Optional[dict]:
+        """Найти контрагента в БД по ИНН и КПП.
+
+        Логика поиска (как при сохранении — upsert_counterparty):
+          • с ИНН и КПП — точное совпадение (inn = $1 AND kpp = $2);
+          • с ИНН без КПП — поиск по (INN, KPP IS NULL);
+          • без ИНН — None.
+        Возвращает dict с реквизитами найденного контрагента или None.
+        """
+        if self._repo is None or self._repo._pool is None:
+            return None
+
+        inn_c = self._clean_inn_kpp(inn)
+        kpp_c = self._clean_inn_kpp(kpp)
+        if not inn_c:
+            return None
+
+        try:
+            async with self._repo._pool.acquire() as conn:
+                if kpp_c:
+                    row = await conn.fetchrow(
+                        "SELECT * FROM counterparties WHERE inn = $1 AND kpp = $2 LIMIT 1",
+                        inn_c, kpp_c,
+                    )
+                else:
+                    row = await conn.fetchrow(
+                        "SELECT * FROM counterparties WHERE inn = $1 AND kpp IS NULL LIMIT 1",
+                        inn_c,
+                    )
+        except Exception as e:
+            logger.info(f"[LlamaClient] Ошибка поиска контрагента в БД: {e}")
+            return None
+
+        if not row:
+            return None
+
+        return {
+            "name": row["name"],
+            "shortName": row["short_name"],
+            "inn": row["inn"],
+            "kpp": row["kpp"],
+            "ogrn": row["ogrn"],
+            "address": row["address"],
+            "bank": row["bank"],
+            "bik": row["bik"],
+            "accountNumber": row["account_number"],
+            "correspondentAccount": row["correspondent_account"],
+            "representative": row["representative"],
+        }
 
     def _add_usage(self, usage: Optional[dict]) -> None:
         """Накопить usage из ответа модели в статистику токенов."""
@@ -1150,6 +1218,10 @@ class LlamaClient:
             # Шаг 3: голосование — берём значения с большинством
             result = self._vote_results(results, doc_type, file_name)
 
+            # Шаг 4: контрагенты из БД. Если организация уже есть в БД (по ИНН/КПП),
+            # подставляем её реквизиты вместо данных, распознанных из документа.
+            await self._resolve_counterparties_from_db(result)
+
             # Для unknown-типа в режиме use_text подставляем OCR-текст в extractedText
             # кодом (модель не должна копировать весь текст в JSON — это тратит токены).
             if doc_type == DOCUMENT_TYPE_UNKNOWN and use_text:
@@ -1161,6 +1233,41 @@ class LlamaClient:
                 "completionTokens": self._token_stats["completion"],
             }
             return result
+
+    async def _resolve_counterparties_from_db(self, result: dict) -> None:
+        """Заменить данные контрагентов в результате на реквизиты из БД.
+
+        Для каждого блока контрагента (supplier/buyer/seller/payer/executor/
+        customer/party1/party2/sender/recipient), у которого есть ИНН, ищем
+        организацию в БД по (ИНН, КПП). Если найдена — подставляем её
+        реквизиты (name, shortName, inn, kpp, ogrn, address, bank, bik,
+        accountNumber, correspondentAccount, representative) вместо распознанных.
+        """
+        if self._repo is None:
+            return
+
+        cp_keys = (
+            "supplier", "buyer", "seller", "payer",
+            "executor", "customer", "party1", "party2",
+            "sender", "recipient",
+        )
+        for key in cp_keys:
+            data = result.get(key)
+            if not isinstance(data, dict):
+                continue
+            inn = data.get("inn")
+            if not inn:
+                continue
+            found = await self.find_counterparty(inn, data.get("kpp"))
+            if not found:
+                continue
+            for field, value in found.items():
+                if value is not None:
+                    data[field] = value
+            logger.info(
+                f"[LlamaClient] Контрагент {key} найден в БД "
+                f"(ИНН {self._clean_inn_kpp(inn)}): подставлены реквизиты из БД"
+            )
 
     @staticmethod
     def _normalize_for_vote(v: Any) -> Any:
@@ -1602,6 +1709,8 @@ class DocumentBot(Bot):
 
         # Репозиторий документов (PostgreSQL)
         self.doc_repo = DocumentRepository()
+        # Привязываем репозиторий к LlamaClient — для поиска контрагентов по ИНН/КПП
+        self.llama.set_repo(self.doc_repo)
 
         # Трекер обработанных файлов (href → timestamp)
         self._processed: Dict[str, float] = {}
